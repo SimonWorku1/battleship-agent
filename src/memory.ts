@@ -30,6 +30,9 @@ export interface OpponentRecord {
   /** Games we won / lost against this opponent (or class), across all attempts. */
   wins: number;
   losses: number;
+  /** Total shots we fired and hits we landed across all games (for avg efficiency). */
+  totalShots: number;
+  totalHits: number;
   shipHeat: number[];
   fireHeat: number[];
 }
@@ -113,6 +116,8 @@ function sanitizeRecords(
         games: r.games ?? 0,
         wins: r.wins ?? 0,
         losses: r.losses ?? 0,
+        totalShots: r.totalShots ?? 0,
+        totalHits: r.totalHits ?? 0,
         shipHeat: r.shipHeat,
         fireHeat: r.fireHeat,
       };
@@ -127,6 +132,8 @@ function blankRecord(size: number, cls: string | null): OpponentRecord {
     games: 0,
     wins: 0,
     losses: 0,
+    totalShots: 0,
+    totalHits: 0,
     shipHeat: new Array<number>(size * size).fill(0),
     fireHeat: new Array<number>(size * size).fill(0),
   };
@@ -182,6 +189,8 @@ export function learnGame(
   shipCells: [number, number][],
   fireCells: [number, number][],
   won?: boolean | null,
+  shots?: number,
+  hits?: number,
 ): void {
   // Global ship heatmap + game counter (unchanged behaviour).
   learnShipCells(mem, shipCells);
@@ -200,6 +209,8 @@ export function learnGame(
     rec.games += 1;
     if (won === true) rec.wins += 1;
     else if (won === false) rec.losses += 1;
+    if (typeof shots === "number") rec.totalShots += shots;
+    if (typeof hits === "number") rec.totalHits += hits;
     bump(rec.shipHeat, shipCells, mem.size);
     bump(rec.fireHeat, fireCells, mem.size);
   }
@@ -219,14 +230,19 @@ export function opponentScoreboard(mem: Memory): string {
       wins: r.wins,
       losses: r.losses,
       rate: r.games > 0 ? r.wins / r.games : 0,
+      avgShots: r.games > 0 && r.totalShots > 0 ? r.totalShots / r.games : null,
+      hitRate: r.totalShots > 0 ? (100 * r.totalHits) / r.totalShots : null,
     }))
     .filter((r) => r.games > 0)
-    .sort((a, b) => a.rate - b.rate);
+    .sort((a, b) => a.rate - b.rate || (b.avgShots ?? 0) - (a.avgShots ?? 0));
   if (rows.length === 0) return "No per-opponent records yet.";
-  const lines = rows.map(
-    (r) =>
-      `  ${r.id.slice(0, 12)} [${r.cls}] ${r.wins}-${r.losses} (${(100 * r.rate).toFixed(0)}% win)`,
-  );
+  const lines = rows.map((r) => {
+    const eff =
+      r.avgShots !== null
+        ? ` avg ${r.avgShots.toFixed(1)} shots ${r.hitRate !== null ? `(${r.hitRate.toFixed(0)}% hit)` : ""}`
+        : "";
+    return `  ${r.id.slice(0, 14).padEnd(14)} [${r.cls.padEnd(7)}] ${String(r.wins).padStart(2)}-${r.losses} (${(100 * r.rate).toFixed(0)}% win)${eff}`;
+  });
   return ["Per-opponent record (worst win-rate first):", ...lines].join("\n");
 }
 

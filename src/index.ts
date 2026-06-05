@@ -57,7 +57,9 @@ function nextMove(resp: ServerResponse): NextRequiredMove | undefined {
  */
 function gameWon(resp: ServerResponse): boolean | null {
   const candidates: unknown[] = [
-    (resp.result as { won?: unknown; outcome?: unknown; result?: unknown } | undefined)?.won,
+    // The real field the server sends on GAME_COMPLETED.
+    (resp as { gameOutcome?: unknown }).gameOutcome,
+    (resp.result as { won?: unknown } | undefined)?.won,
     (resp.result as { outcome?: unknown } | undefined)?.outcome,
     (resp.result as { result?: unknown } | undefined)?.result,
     (resp.state as { outcome?: unknown } | undefined)?.outcome,
@@ -138,19 +140,27 @@ async function main(): Promise<void> {
         // The final game's completion can fold directly into this response
         // (no preceding GAME_COMPLETED). Only learn if we haven't already.
         if (!currentGameLearned) {
+          // Record the game-ending shot (came back here, not in MOVE_REQUIRED).
+          if (lastShot) {
+            const info = shotOutcome(resp, lastShot);
+            if (info) {
+              parsed += 1;
+              if (info.outcome !== "MISS") hits += 1;
+              brain.record(lastShot[0], lastShot[1], info.outcome, info.sunkLength);
+            }
+            lastShot = null;
+          }
           const finalInc = incomingCells(resp);
           if (finalInc.length > 0) incoming = finalInc;
-          // Win/loss for this final game: prefer a server field, else infer
-          // from whether we cleared the enemy's whole fleet.
-          const won = gameWon(resp) ?? (brain.enemyCleared() ? true : false);
-          learnGame(memory, opp, brain.discoveredShipCells(), incoming, won);
+          const won = gameWon(resp) ?? brain.enemyCleared();
+          learnGame(memory, opp, brain.discoveredShipCells(), incoming, won, shots, hits);
           // The final game's completion folded directly into this response (no
           // discrete GAME_COMPLETED). Print its stats so the last game is never
           // a silent gap — shots=0 here would mean it was forfeited.
           const cls = opp.class ? ` vs ${opp.class}` : "";
           console.log(
-            `Game ${game} complete${cls} — ${shots} shots, ${hits} hits, ${parsed} parsed (final)` +
-              (won ? ", WON" : ", lost"),
+            `Game ${game} complete${cls} — ${shots} shots, ${hits} hits, ${parsed} parsed (final), ` +
+              (won ? "WON" : "lost"),
           );
           if (shots === 0) {
             console.warn(
@@ -193,15 +203,27 @@ async function main(): Promise<void> {
       }
 
       case "GAME_COMPLETED": {
-        // Win/loss: prefer an explicit server field; if absent, infer it from
-        // whether our firing engine cleared the enemy's entire fleet (a duel
-        // ends when one side is fully sunk).
+        // The shot that ended the game comes back here, not in a MOVE_REQUIRED.
+        // Record it now so the brain's remaining-fleet list is accurate before
+        // we call enemyCleared() and discoveredShipCells().
+        if (lastShot) {
+          const info = shotOutcome(resp, lastShot);
+          if (info) {
+            parsed += 1;
+            if (info.outcome !== "MISS") hits += 1;
+            brain.record(lastShot[0], lastShot[1], info.outcome, info.sunkLength);
+          }
+          lastShot = null;
+        }
+
+        // Win/loss: the server sends gameOutcome:"AGENT_WIN"/"AGENT_LOSS".
+        // Fall back to brain inference only if that field is absent.
         const serverWon = gameWon(resp);
         if (serverWon === null && !dumpedGameShape) {
           dumpedGameShape = true;
           console.log("[game-completed shape]", JSON.stringify(resp).slice(0, 600));
         }
-        const won = serverWon ?? (brain.enemyCleared() ? true : false);
+        const won = serverWon ?? brain.enemyCleared();
         const cls = opp.class ? ` vs ${opp.class}` : "";
         console.log(
           `Game ${game} complete${cls} — ${shots} shots, ${hits} hits, ${parsed} parsed` +
@@ -211,7 +233,7 @@ async function main(): Promise<void> {
           // Capture any final incoming-shot state the server bundles here.
           const finalInc = incomingCells(resp);
           if (finalInc.length > 0) incoming = finalInc;
-          learnGame(memory, opp, brain.discoveredShipCells(), incoming, won);
+          learnGame(memory, opp, brain.discoveredShipCells(), incoming, won, shots, hits);
           currentGameLearned = true;
         }
         game += 1;

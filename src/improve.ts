@@ -56,6 +56,13 @@ function bounds(key: keyof Policy): string {
 function summarize(mem: Memory, current: Policy): string {
   const size = mem.size || BOARD_SIZE;
   const scores = mem.attempts.map((a) => a.score);
+  // Per-class efficiency from memory (avg shots, win rate).
+  const classLines = Object.entries(mem.classes).map(([cls, r]) => {
+    const winRate = r.games > 0 ? ((100 * r.wins) / r.games).toFixed(0) : "?";
+    const avgShots = r.games > 0 && r.totalShots > 0 ? (r.totalShots / r.games).toFixed(1) : "?";
+    return `  ${cls}: ${r.wins}-${r.losses} (${winRate}% win) avg ${avgShots} shots over ${r.games} games`;
+  });
+
   const history = mem.attempts
     .slice(-12)
     .map((a) => {
@@ -103,6 +110,9 @@ function summarize(mem: Memory, current: Policy): string {
     `Opponent ship-cell distribution (of all ship cells seen):`,
     `  outer ring: ${pct(edge)} of cells   interior: ${pct(interior)}`,
     `  even-parity cells: ${pct(even)}   odd-parity cells: ${pct(odd)}`,
+    ``,
+    `Per-class efficiency:`,
+    ...classLines,
     ``,
     `Current policy: λ(prior)=${current.lambda} targetBonus=${current.targetBonus} huntParityBias=${current.huntParityBias} edgeAversion=${current.edgeAversion}`,
     ``,
