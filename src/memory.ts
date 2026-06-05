@@ -301,10 +301,16 @@ export function opponentAdaptation(
     (opp.class ? mem.classes[opp.class] : undefined);
   if (!rec || rec.games < 3) return { placementCandidates: 100, lambdaBoost: 0 };
   const lossRate = 1 - rec.wins / rec.games;
-  // High avg shots hurts score even when we win (more opponent turns = more our ships sunk).
-  // +0 at ≤25 shots (near-perfect), up to +0.4 at 65+ shots.
+  // High avg shots hurts score even when we win (more opponent turns = more our
+  // ships sunk). But amplifying lambda only helps when the prior actually
+  // predicts this opponent's placement — i.e. a healthy hit rate. For noisy
+  // opponents (low hit rate = they randomize hard) a stronger prior over-bets on
+  // historically common cells they aren't using, so we skip the shot boost there
+  // and let the broader search (placementCandidates) do the work instead.
   const avgShots = rec.totalShots > 0 ? rec.totalShots / rec.games : 0;
-  const shotBoost = Math.min(0.4, Math.max(0, (avgShots - 25) / 100));
+  const hitRate = rec.totalShots > 0 ? rec.totalHits / rec.totalShots : 0;
+  const priorIsPredictive = hitRate >= 0.4;
+  const shotBoost = priorIsPredictive ? Math.min(0.4, Math.max(0, (avgShots - 25) / 100)) : 0;
   return {
     placementCandidates: Math.round(100 + 200 * lossRate),
     lambdaBoost: Math.min(1.0, 0.6 * lossRate + shotBoost),
