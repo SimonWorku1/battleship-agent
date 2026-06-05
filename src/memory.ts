@@ -272,6 +272,44 @@ function bump(heat: number[], cells: [number, number][], size: number): void {
 }
 
 /**
+ * Our win rate vs a specific opponent (and how many games it's based on),
+ * preferring the opponent's own record and falling back to its class. Returns
+ * null when we have no record yet (so callers use neutral defaults).
+ */
+export function opponentWinRate(
+  mem: Memory,
+  opp: Opponent,
+): { rate: number; games: number } | null {
+  const rec = (opp.id ? mem.opponents[opp.id] : undefined) ??
+    (opp.class ? mem.classes[opp.class] : undefined);
+  if (!rec || rec.games <= 0) return null;
+  return { rate: rec.wins / rec.games, games: rec.games };
+}
+
+/**
+ * Outcome-aware adaptation. The more we LOSE to a specific opponent, the harder
+ * we try against it next time: search more candidate hiding spots, and lean
+ * more strongly on that opponent's own learned heatmaps (rather than the broad
+ * pools). Returns gentle multipliers, neutral (1×, +0) when we have no record
+ * or are already winning, so it can only help.
+ */
+export function opponentAdaptation(
+  mem: Memory,
+  opp: Opponent,
+): { placementCandidates: number; lambdaBoost: number } {
+  const wr = opponentWinRate(mem, opp);
+  // Need a few games before reacting, so we don't over-fit to noise.
+  if (!wr || wr.games < 3) return { placementCandidates: 100, lambdaBoost: 0 };
+  const lossRate = 1 - wr.rate; // 0 (always win) … 1 (always lose)
+  // Lose more → search up to ~3× more placements, and add up to +0.6 to lambda
+  // (so the opponent's specific ship heatmap dominates the search).
+  return {
+    placementCandidates: Math.round(100 + 200 * lossRate),
+    lambdaBoost: 0.6 * lossRate,
+  };
+}
+
+/**
  * Build the firing prior for a specific opponent, blending (most specific
  * first) this opponent's own ship heatmap, its class aggregate, and the global
  * heatmap. Specific data is weighted higher but the broader pools fill in when

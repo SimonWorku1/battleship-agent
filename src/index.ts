@@ -17,6 +17,7 @@ import {
   recordAttempt,
   progressSummary,
   opponentScoreboard,
+  opponentAdaptation,
   type Opponent,
 } from "./memory.js";
 import { loadPolicy, savePolicy } from "./policy.js";
@@ -287,17 +288,24 @@ async function main(): Promise<void> {
           parsed = 0;
           incoming = [];
           currentGameLearned = false;
+          // Outcome-aware: the more we've LOST to THIS specific opponent, the
+          // harder we try — search more hiding spots and lean more on their own
+          // ship heatmap. Neutral until we have a few games on record.
+          const adapt = opponentAdaptation(memory, opp);
           brain = new Brain(
             BOARD_SIZE,
-            offensePrior(memory, opp, policy.lambda), // fire at THIS opponent's likely cells first
+            // fire at THIS opponent's likely cells first (boosted if we lose to them)
+            offensePrior(memory, opp, policy.lambda + adapt.lambdaBoost),
             undefined,
             policy,
           );
           // Hide in this opponent's coldest zone (where they rarely fire).
-          const fleet = chooseDispersedFleet(dangerMap(memory, opp));
+          const fleet = chooseDispersedFleet(dangerMap(memory, opp), adapt.placementCandidates);
           validateFleet(fleet); // prove it's legal before sending
           const cls = opp.class ? ` (${opp.class})` : "";
-          console.log(`Game ${game}: placing ships${cls}...`);
+          const adaptNote =
+            adapt.lambdaBoost > 0 ? ` [adapting: +${adapt.lambdaBoost.toFixed(2)}λ, ${adapt.placementCandidates} layouts]` : "";
+          console.log(`Game ${game}: placing ships${cls}${adaptNote}...`);
           resp = await api.placeShips(fleet);
         } else {
           // SUBMIT_SHOT (default)
