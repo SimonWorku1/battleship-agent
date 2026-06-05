@@ -137,6 +137,18 @@ async function main(): Promise<void> {
           const finalInc = incomingCells(resp);
           if (finalInc.length > 0) incoming = finalInc;
           learnGame(memory, opp, brain.discoveredShipCells(), incoming);
+          // The final game's completion folded directly into this response (no
+          // discrete GAME_COMPLETED). Print its stats so the last game is never
+          // a silent gap — shots=0 here would mean it was forfeited.
+          const cls = opp.class ? ` vs ${opp.class}` : "";
+          console.log(
+            `Game ${game} complete${cls} — ${shots} shots, ${hits} hits, ${parsed} parsed (final)`,
+          );
+          if (shots === 0) {
+            console.warn(
+              `WARNING: final game fired 0 shots — it was forfeited (auto-loss). Check the placement/timeout path.`,
+            );
+          }
         }
         const score = resp.result?.finalScore;
         const r2 = resp.result as Record<string, unknown> | undefined;
@@ -187,7 +199,9 @@ async function main(): Promise<void> {
         }
         game += 1;
         lastShot = null;
-        currentGameLearned = false; // reset for the next game
+        // Note: currentGameLearned is reset at PLACE_SHIPS for the next game, NOT
+        // here — if resp.next is ATTEMPT_COMPLETED (final game), resetting now
+        // would double-learn this same board.
         // Continue from the embedded next response, or re-read state.
         resp = resp.next ?? (await api.getCurrent());
         continue;

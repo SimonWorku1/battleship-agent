@@ -122,9 +122,13 @@ export function dispersedFleet(): Placement[] {
 export function chooseDispersedFleet(
   danger: number[] | null,
   candidates = 100,
+  maxMs = 2000,
 ): Placement[] {
   if (!danger) return dispersedFleet();
 
+  // Hard time budget: placement is a timed move (~10s server limit), so we
+  // never let candidate generation run long enough to risk a forfeit.
+  const deadline = Date.now() + maxMs;
   let best: Placement[] | null = null;
   let bestRisk = Infinity;
   for (let i = 0; i < candidates; i++) {
@@ -140,6 +144,7 @@ export function chooseDispersedFleet(
       bestRisk = risk;
       best = fleet;
     }
+    if (Date.now() >= deadline) break; // out of time — keep the best so far
   }
   return best ?? dispersedFleet();
 }
