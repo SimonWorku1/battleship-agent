@@ -145,6 +145,24 @@ export function saveMemory(file: string, mem: Memory): void {
   writeFileSync(file, JSON.stringify(mem), { mode: 0o600 });
 }
 
+/**
+ * Zero the per-opponent and per-class *record* stats (games, wins, losses,
+ * shots, hits) while KEEPING the heatmaps. Use this after a win-detection bug
+ * polluted the W/L history: the heatmaps (which only ever accumulate "where the
+ * ship was" / "where they fired") stay valid, but the corrupted win counts and
+ * the shots/games mismatch (avg-shots biased low) are reset so the scoreboard
+ * rebuilds from clean data.
+ */
+export function resetRecords(mem: Memory): void {
+  for (const rec of [...Object.values(mem.opponents), ...Object.values(mem.classes)]) {
+    rec.games = 0;
+    rec.wins = 0;
+    rec.losses = 0;
+    rec.totalShots = 0;
+    rec.totalHits = 0;
+  }
+}
+
 /** Fold one game's discovered ship cells into the heatmap. */
 export function learnShipCells(mem: Memory, cells: [number, number][]): void {
   if (cells.length === 0) return;

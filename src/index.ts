@@ -57,7 +57,8 @@ function nextMove(resp: ServerResponse): NextRequiredMove | undefined {
  */
 function gameWon(resp: ServerResponse): boolean | null {
   const candidates: unknown[] = [
-    // The real field the server sends on GAME_COMPLETED.
+    // The real field the server sends on GAME_COMPLETED, e.g. "AGENT_WIN" /
+    // "OPPONENT_WIN" / "AGENT_LOSS".
     (resp as { gameOutcome?: unknown }).gameOutcome,
     (resp.result as { won?: unknown } | undefined)?.won,
     (resp.result as { outcome?: unknown } | undefined)?.outcome,
@@ -70,8 +71,18 @@ function gameWon(resp: ServerResponse): boolean | null {
     if (typeof v === "boolean") return v;
     if (typeof v === "string") {
       const up = v.toUpperCase();
-      if (up.includes("WIN") || up === "WON") return true;
-      if (up.includes("LOSS") || up.includes("LOSE") || up.includes("LOST")) return false;
+      // Check loss/opponent indicators FIRST: "OPPONENT_WIN" contains "WIN",
+      // so a naive win-check would mis-read a loss as a win.
+      if (
+        up.includes("OPPONENT") ||
+        up.includes("LOSS") ||
+        up.includes("LOSE") ||
+        up.includes("LOST") ||
+        up.includes("DEFEAT")
+      ) {
+        return false;
+      }
+      if (up.includes("AGENT_WIN") || up.includes("WIN") || up === "WON") return true;
     }
   }
   return null;
