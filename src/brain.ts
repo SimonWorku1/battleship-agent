@@ -90,12 +90,39 @@ export class Brain {
   nextShot(): Cell {
     const density = this.densityMap();
 
+    // Lattice hunting: while searching (no outstanding hits), only probe cells
+    // on a diagonal lattice spaced by the smallest remaining ship length L.
+    // Every ship of length >= L crosses exactly one (r+c)%L === phase cell, so
+    // this lattice is GUARANTEED to find every remaining ship while skipping
+    // ~(L-1)/L of the board — the main lever against long, miss-heavy games.
+    // As the smaller ships sink, L grows and the lattice gets even sparser.
+    const hunting = this.openHits.length === 0;
+    const minLen = hunting && this.remaining.length > 0 ? Math.min(...this.remaining) : 1;
+    const phase = minLen >= 2 ? this.bestLatticePhase(density, minLen) : -1;
+
+    const onLattice = (r: number, c: number): boolean =>
+      phase < 0 || (r + c) % minLen === phase;
+
+    let best = this.pickBest(density, onLattice);
+    // Safety net: if the lattice somehow has no un-shot cell, fall back to the
+    // full board so we never stall.
+    if (!best) best = this.pickBest(density, () => true);
+    if (!best) throw new Error("No cells left to shoot");
+    return this.take(best[0], best[1]);
+  }
+
+  /** Highest-density un-shot cell among those allowed by `eligible`, or null. */
+  private pickBest(
+    density: number[],
+    eligible: (r: number, c: number) => boolean,
+  ): Cell | null {
     let best: Cell | null = null;
     let bestScore = -Infinity;
     let ties = 0;
     for (let r = 0; r < this.size; r++) {
       for (let c = 0; c < this.size; c++) {
         if (this.shotMask[this.idx(r, c)]) continue;
+        if (!eligible(r, c)) continue;
         const d = density[this.idx(r, c)] ?? 0;
         if (d > bestScore) {
           bestScore = d;
@@ -108,9 +135,27 @@ export class Brain {
         }
       }
     }
+    return best;
+  }
 
-    if (!best) throw new Error("No cells left to shoot");
-    return this.take(best[0], best[1]);
+  /** Pick the lattice phase (0..L-1) whose un-shot cells carry the most density. */
+  private bestLatticePhase(density: number[], minLen: number): number {
+    const sums = new Array<number>(minLen).fill(0);
+    for (let r = 0; r < this.size; r++) {
+      for (let c = 0; c < this.size; c++) {
+        if (this.shotMask[this.idx(r, c)]) continue;
+        sums[(r + c) % minLen] = (sums[(r + c) % minLen] ?? 0) + (density[this.idx(r, c)] ?? 0);
+      }
+    }
+    let phase = 0;
+    let bestSum = -Infinity;
+    for (let p = 0; p < minLen; p++) {
+      if ((sums[p] ?? 0) > bestSum) {
+        bestSum = sums[p] ?? 0;
+        phase = p;
+      }
+    }
+    return phase;
   }
 
   private take(r: number, c: number): Cell {
