@@ -61,12 +61,20 @@ export class Auth {
     }
 
     console.log("No saved agent found — connecting for the first time.");
+    // Pick a mode the server actually advertises in discovery. We want the
+    // human-approve-at-a-URL flow, which is "delegated"; fall back to
+    // whatever the server supports, and omit entirely if it lists none
+    // (letting the SDK choose its default).
+    const supported = provider.modes ?? [];
+    const mode = supported.includes("delegated")
+      ? "delegated"
+      : supported[0];
     const { agentId } = await client.connectAgent({
       provider: issuer,
       capabilities: [...CAPABILITIES],
       name: "battleship-agent",
-      mode: "autonomous",
-      reason: "Play the Battleships competition autonomously.",
+      ...(mode ? { mode } : {}),
+      reason: "Play the Battleships competition.",
     });
 
     writeText(AGENT_ID_FILE, agentId);
