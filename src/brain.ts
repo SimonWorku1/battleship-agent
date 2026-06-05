@@ -43,15 +43,22 @@ export class Brain {
   private remaining: number[]; // lengths of ships not yet sunk
   private readonly initialShips: number; // how many ships the enemy started with
   private openHits: Cell[] = []; // hits belonging to ships not yet sunk
+  /** Per-placement orientation multipliers (this opponent's H/V bias). */
+  private readonly orientBias: { h: number; v: number };
+  /** Orientation of ships we've sunk this game (for learning the bias). */
+  private horizSunk = 0;
+  private vertSunk = 0;
 
   constructor(
     size: number = BOARD_SIZE,
     prior?: number[],
     fleetLengths: number[] = DEFAULT_FLEET,
     policy: Policy = DEFAULT_POLICY,
+    orientBias: { h: number; v: number } = { h: 1, v: 1 },
   ) {
     this.size = size;
     this.policy = policy;
+    this.orientBias = orientBias;
     this.status = new Array<Status>(size * size).fill(Status.Unknown);
     this.shotMask = new Array<boolean>(size * size).fill(false);
     this.prior =
@@ -197,6 +204,11 @@ export class Brain {
     return this.initialShips - this.remaining.length;
   }
 
+  /** Orientation of the ships we've sunk this game (for learning H/V bias). */
+  sunkOrientations(): { horiz: number; vert: number } {
+    return { horiz: this.horizSunk, vert: this.vertSunk };
+  }
+
   /** Every cell we've confirmed holds a ship (for learning a placement prior). */
   discoveredShipCells(): Cell[] {
     const cells: Cell[] = [];
@@ -219,6 +231,13 @@ export class Brain {
 
     // Take the `length` cells of the run nearest `last` as the sunk ship.
     const sunkCells = run.slice(0, length);
+    // Tally the sunk ship's orientation (≥2 collinear cells → unambiguous) so we
+    // can learn this opponent's horizontal/vertical placement preference.
+    if (sunkCells.length >= 2) {
+      const r0 = sunkCells[0]![0];
+      if (sunkCells.every(([r]) => r === r0)) this.horizSunk += 1;
+      else this.vertSunk += 1;
+    }
     const sunkKeys = new Set(sunkCells.map(([r, c]) => `${r},${c}`));
     this.openHits = this.openHits.filter(
       ([r, c]) => !sunkKeys.has(`${r},${c}`),
@@ -324,7 +343,11 @@ export class Brain {
 
     if (targeting && covered === 0) return; // must explain an outstanding hit
 
-    const weight = targeting ? 1 + covered * this.policy.targetBonus : 1;
+    // Bias toward this opponent's preferred orientation: dr===0 is a horizontal
+    // placement, dr===1 vertical. For a lone hit this nudges us to extend along
+    // the axis they favour; for a hunt it tilts the whole density map that way.
+    const orient = dr === 0 ? this.orientBias.h : this.orientBias.v;
+    const weight = (targeting ? 1 + covered * this.policy.targetBonus : 1) * orient;
     for (const [r, c] of cells) {
       const i = this.idx(r, c);
       if (this.shotMask[i]) continue; // only score un-shot cells

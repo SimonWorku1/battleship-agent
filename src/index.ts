@@ -14,6 +14,7 @@ import {
   learnGame,
   offensePrior,
   dangerMap,
+  orientationBias,
   recordAttempt,
   progressSummary,
   opponentScoreboard,
@@ -180,7 +181,16 @@ async function main(): Promise<void> {
           const won =
             winsN !== undefined ? winsN > wonCount : (gameWon(resp) ?? brain.enemyCleared());
           if (won) wonCount += 1;
-          learnGame(memory, opp, brain.discoveredShipCells(), incoming, won, shots, hits);
+          learnGame(
+            memory,
+            opp,
+            brain.discoveredShipCells(),
+            incoming,
+            won,
+            shots,
+            hits,
+            brain.sunkOrientations(),
+          );
           const cls = opp.class ? ` vs ${opp.class}` : "";
           console.log(
             `Game ${game} complete${cls} — ${shots} shots, ${hits} hits, ${parsed} parsed (final), ` +
@@ -254,7 +264,16 @@ async function main(): Promise<void> {
           const finalInc = incomingCells(resp);
           if (finalInc.length > 0) incoming = finalInc;
           if (won) wonCount += 1; // running tally so the final game can be inferred
-          learnGame(memory, opp, brain.discoveredShipCells(), incoming, won, shots, hits);
+          learnGame(
+            memory,
+            opp,
+            brain.discoveredShipCells(),
+            incoming,
+            won,
+            shots,
+            hits,
+            brain.sunkOrientations(),
+          );
           currentGameLearned = true;
         }
         game += 1;
@@ -307,6 +326,8 @@ async function main(): Promise<void> {
             offensePrior(memory, opp, policy.lambda + adapt.lambdaBoost),
             undefined,
             policy,
+            // tilt the search toward this opponent's preferred ship orientation
+            orientationBias(memory, opp),
           );
           // Hide in this opponent's coldest zone (where they rarely fire).
           const fleet = chooseDispersedFleet(dangerMap(memory, opp), adapt.placementCandidates);

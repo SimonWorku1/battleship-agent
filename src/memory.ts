@@ -33,6 +33,9 @@ export interface OpponentRecord {
   /** Total shots we fired and hits we landed across all games (for avg efficiency). */
   totalShots: number;
   totalHits: number;
+  /** How many of this opponent's sunk ships sat horizontally / vertically. */
+  horizShips: number;
+  vertShips: number;
   shipHeat: number[];
   fireHeat: number[];
 }
@@ -118,6 +121,8 @@ function sanitizeRecords(
         losses: r.losses ?? 0,
         totalShots: r.totalShots ?? 0,
         totalHits: r.totalHits ?? 0,
+        horizShips: r.horizShips ?? 0,
+        vertShips: r.vertShips ?? 0,
         shipHeat: r.shipHeat,
         fireHeat: r.fireHeat,
       };
@@ -134,6 +139,8 @@ function blankRecord(size: number, cls: string | null): OpponentRecord {
     losses: 0,
     totalShots: 0,
     totalHits: 0,
+    horizShips: 0,
+    vertShips: 0,
     shipHeat: new Array<number>(size * size).fill(0),
     fireHeat: new Array<number>(size * size).fill(0),
   };
@@ -209,6 +216,7 @@ export function learnGame(
   won?: boolean | null,
   shots?: number,
   hits?: number,
+  orient?: { horiz: number; vert: number },
 ): void {
   // Global ship heatmap + game counter (unchanged behaviour).
   learnShipCells(mem, shipCells);
@@ -229,6 +237,10 @@ export function learnGame(
     else if (won === false) rec.losses += 1;
     if (typeof shots === "number") rec.totalShots += shots;
     if (typeof hits === "number") rec.totalHits += hits;
+    if (orient) {
+      rec.horizShips += orient.horiz;
+      rec.vertShips += orient.vert;
+    }
     bump(rec.shipHeat, shipCells, mem.size);
     bump(rec.fireHeat, fireCells, mem.size);
   }
@@ -345,6 +357,37 @@ export function offensePrior(mem: Memory, opp: Opponent, lambda = 0.6): number[]
   add(mem.heat, 0.5);
 
   return heatToPrior(combined, lambda);
+}
+
+/**
+ * How strongly a specific opponent prefers horizontal vs vertical ship
+ * placement, returned as a pair of multipliers (centred on 1) to apply to the
+ * firing engine's horizontal / vertical placement weights. The signal is the
+ * orientation of the ships we've actually sunk against this opponent. We blend
+ * the opponent's own tally (weighted higher) with its class aggregate, smooth
+ * toward 50/50 so small samples stay gentle, and cap the multipliers so we
+ * never fully ignore the other orientation (they still use it sometimes). Stays
+ * neutral {h:1, v:1} until we have enough data to trust the bias.
+ */
+export function orientationBias(mem: Memory, opp: Opponent): { h: number; v: number } {
+  let horiz = 0;
+  let vert = 0;
+  const idRec = opp.id ? mem.opponents[opp.id] : undefined;
+  const clsRec = opp.class ? mem.classes[opp.class] : undefined;
+  if (idRec) {
+    horiz += 3 * idRec.horizShips;
+    vert += 3 * idRec.vertShips;
+  }
+  if (clsRec) {
+    horiz += clsRec.horizShips;
+    vert += clsRec.vertShips;
+  }
+  const total = horiz + vert;
+  if (total < 8) return { h: 1, v: 1 }; // too little data — stay neutral
+  const K = 8; // smoothing pseudo-counts toward 50/50
+  const pH = (horiz + K / 2) / (total + K);
+  const clamp = (x: number): number => Math.max(0.5, Math.min(1.5, x));
+  return { h: clamp(2 * pH), v: clamp(2 * (1 - pH)) };
 }
 
 /**
