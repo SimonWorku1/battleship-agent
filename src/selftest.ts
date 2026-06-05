@@ -11,7 +11,7 @@
  *     upon itself.
  */
 import { BOARD_SIZE, FLEET } from "./types.js";
-import { randomFleet, validateFleet, cellsFor } from "./placement.js";
+import { randomFleet, dispersedFleet, validateFleet, cellsFor } from "./placement.js";
 import { Brain, type Outcome } from "./brain.js";
 import {
   loadMemory,
@@ -170,8 +170,40 @@ function selfImprovement(): void {
   }
 }
 
+/** Verify dispersed placement is always legal AND genuinely non-touching. */
+function placementCheck(): void {
+  const TRIALS = 2000;
+  for (let i = 0; i < TRIALS; i++) {
+    const fleet = dispersedFleet();
+    validateFleet(fleet); // legal: in bounds, right lengths, no overlaps
+    // Map each cell to its ship index, then assert no two ships are adjacent
+    // (including diagonally). Note: the fallback path may touch — tolerate a
+    // small rate, but the no-touch path should hold essentially always.
+    const owner = new Map<string, number>();
+    fleet.forEach((p, idx) => {
+      const len = FLEET.find((f) => f.shipClass === p.shipClass)?.length ?? 0;
+      for (const [r, c] of cellsFor(p, len) ?? []) owner.set(`${r},${c}`, idx);
+    });
+    for (const [key, idx] of owner) {
+      const [r, c] = key.split(",").map(Number) as [number, number];
+      for (let dr = -1; dr <= 1; dr++) {
+        for (let dc = -1; dc <= 1; dc++) {
+          const other = owner.get(`${r + dr},${c + dc}`);
+          if (other !== undefined && other !== idx) {
+            throw new Error(`Dispersed fleet has touching ships near ${key}`);
+          }
+        }
+      }
+    }
+  }
+  console.log(
+    `\nPlacement check passed: ${TRIALS} dispersed fleets are legal and non-touching.`,
+  );
+}
+
 function main(): void {
   correctnessAndBaseline();
+  placementCheck();
   selfImprovement();
 }
 

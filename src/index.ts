@@ -1,7 +1,7 @@
 import { Auth } from "./auth.js";
 import { GameApi } from "./api.js";
 import { Brain } from "./brain.js";
-import { randomFleet, validateFleet } from "./placement.js";
+import { dispersedFleet, validateFleet } from "./placement.js";
 import { shotOutcome } from "./interpret.js";
 import type { NextRequiredMove, ServerResponse } from "./types.js";
 import { DEBUG, MEMORY_FILE, POLICY_FILE, AUTO_IMPROVE } from "./config.js";
@@ -169,7 +169,7 @@ async function main(): Promise<void> {
 
         const move = nextMove(resp);
         if (move === "PLACE_SHIPS") {
-          const fleet = randomFleet();
+          const fleet = dispersedFleet(); // no-touch layout maximises survival
           validateFleet(fleet); // prove it's legal before sending
           console.log(`Game ${game}: placing ships...`);
           resp = await api.placeShips(fleet);

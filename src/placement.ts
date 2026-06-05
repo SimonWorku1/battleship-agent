@@ -50,6 +50,69 @@ export function validateFleet(placements: Placement[]): void {
 }
 
 /**
+ * Generate a legal fleet that maximises survival in a duel: in bounds, no
+ * overlaps, and crucially **no two ships touching** — not even diagonally.
+ *
+ * Why: opponents hunt on a parity pattern, then target a ship's neighbours
+ * once they land a hit. If our ships touch, a single lucky hit lets them roll
+ * straight from one ship into the next, clearing several for the price of one
+ * search. Forcing a one-cell buffer around every ship means each must be
+ * found from scratch, which sharply increases the number of shots an opponent
+ * needs to wipe our fleet — and in a race-to-clear duel, surviving longer
+ * wins more games.
+ *
+ * Largest ships are placed first (hardest to fit with buffers), layout is
+ * random among all valid no-touch arrangements, and it re-randomises every
+ * game. Falls back to a plain legal fleet if a no-touch layout can't be found,
+ * so we never fail to place.
+ */
+export function dispersedFleet(): Placement[] {
+  for (let attempt = 0; attempt < 3000; attempt++) {
+    const placements: Placement[] = [];
+    const blocked = new Set<string>(); // ship cells + their 8-neighbour buffer
+    let ok = true;
+
+    for (const { shipClass, length } of FLEET) {
+      let placed = false;
+      for (let tries = 0; tries < 300 && !placed; tries++) {
+        const orientation: Orientation =
+          Math.random() < 0.5 ? "HORIZONTAL" : "VERTICAL";
+        const maxRow = orientation === "VERTICAL" ? BOARD_SIZE - length : BOARD_SIZE - 1;
+        const maxCol = orientation === "HORIZONTAL" ? BOARD_SIZE - length : BOARD_SIZE - 1;
+        const startRow = Math.floor(Math.random() * (maxRow + 1));
+        const startCol = Math.floor(Math.random() * (maxCol + 1));
+        const candidate: Placement = { shipClass, orientation, startRow, startCol };
+        const cells = cellsFor(candidate, length);
+        if (!cells) continue;
+        // Reject if any cell touches an already-placed ship (or its buffer).
+        if (cells.some(([r, c]) => blocked.has(`${r},${c}`))) continue;
+        // Commit: block the ship's cells plus a one-cell ring around them.
+        for (const [r, c] of cells) {
+          for (let dr = -1; dr <= 1; dr++) {
+            for (let dc = -1; dc <= 1; dc++) {
+              blocked.add(`${r + dr},${c + dc}`);
+            }
+          }
+        }
+        placements.push(candidate);
+        placed = true;
+      }
+      if (!placed) {
+        ok = false;
+        break;
+      }
+    }
+
+    if (ok) {
+      validateFleet(placements); // defensive: prove it before returning
+      return placements;
+    }
+  }
+  // Couldn't fit a no-touch layout (rare) — fall back to a plain legal one.
+  return randomFleet();
+}
+
+/**
  * Generate a random but legal fleet: in bounds, no overlaps. Re-randomized
  * on every call (every game gets a fresh layout).
  */
