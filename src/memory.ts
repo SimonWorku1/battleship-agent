@@ -299,7 +299,11 @@ export function opponentAdaptation(
 ): { placementCandidates: number; lambdaBoost: number } {
   const rec = (opp.id ? mem.opponents[opp.id] : undefined) ??
     (opp.class ? mem.classes[opp.class] : undefined);
-  if (!rec || rec.games < 3) return { placementCandidates: 100, lambdaBoost: 0 };
+  // Search 500 cold-zone layouts by default (≈30ms — essentially free vs the 2s
+  // budget). Every ship we keep out of the opponent's hot zones is ~10 points of
+  // avoided own-ship-lost penalty — the single biggest score swing in the data —
+  // so even opponents we already beat benefit from a wider hiding search.
+  if (!rec || rec.games < 3) return { placementCandidates: 500, lambdaBoost: 0 };
   const lossRate = 1 - rec.wins / rec.games;
   // High avg shots hurts score even when we win (more opponent turns = more our
   // ships sunk). But amplifying lambda only helps when the prior actually
@@ -312,7 +316,7 @@ export function opponentAdaptation(
   const priorIsPredictive = hitRate >= 0.4;
   const shotBoost = priorIsPredictive ? Math.min(0.4, Math.max(0, (avgShots - 25) / 100)) : 0;
   return {
-    placementCandidates: Math.round(100 + 200 * lossRate),
+    placementCandidates: Math.round(500 + 500 * lossRate),
     lambdaBoost: Math.min(1.0, 0.6 * lossRate + shotBoost),
   };
 }

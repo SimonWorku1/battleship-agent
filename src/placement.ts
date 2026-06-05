@@ -133,13 +133,7 @@ export function chooseDispersedFleet(
   let bestRisk = Infinity;
   for (let i = 0; i < candidates; i++) {
     const fleet = dispersedFleet();
-    let risk = 0;
-    for (const p of fleet) {
-      const len = FLEET.find((f) => f.shipClass === p.shipClass)?.length ?? 0;
-      for (const [r, c] of cellsFor(p, len) ?? []) {
-        risk += danger[r * BOARD_SIZE + c] ?? 0;
-      }
-    }
+    const risk = fleetRisk(fleet, danger);
     if (risk < bestRisk) {
       bestRisk = risk;
       best = fleet;
@@ -147,6 +141,39 @@ export function chooseDispersedFleet(
     if (Date.now() >= deadline) break; // out of time — keep the best so far
   }
   return best ?? dispersedFleet();
+}
+
+/**
+ * Expected cost of a layout against an opponent's fire map — built from how a
+ * duel actually unfolds, not a flat cell sum:
+ *
+ *  1. A ship is effectively DOOMED the moment ANY one of its cells is hit: our
+ *     ships are contiguous, so once the opponent lands a hit they target-sweep
+ *     along its axis and sink it for a few cheap shots. So a ship's discovery
+ *     risk is driven by its HOTTEST cell (the first likely to be fired on), not
+ *     by the sum of all its cells. Minimising each ship's max-danger cell keeps
+ *     whole ships out of the opponent's hot zones.
+ *  2. Losing a bigger ship costs more points (the own-ship-lost penalty scales
+ *     with size, mirroring the sink bonus), so we weight each ship's discovery
+ *     risk by its length and fight hardest to hide the carrier.
+ *
+ * A small fraction of the total-fire sum is added as a tiebreaker, so among
+ * layouts whose hot cells are equally cold we still prefer the overall coldest.
+ */
+function fleetRisk(fleet: Placement[], danger: number[]): number {
+  let risk = 0;
+  let total = 0;
+  for (const p of fleet) {
+    const len = FLEET.find((f) => f.shipClass === p.shipClass)?.length ?? 0;
+    let maxCell = 0;
+    for (const [r, c] of cellsFor(p, len) ?? []) {
+      const d = danger[r * BOARD_SIZE + c] ?? 0;
+      if (d > maxCell) maxCell = d;
+      total += d;
+    }
+    risk += len * maxCell;
+  }
+  return risk + 0.25 * total;
 }
 
 /**
