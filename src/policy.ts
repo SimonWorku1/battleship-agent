@@ -27,7 +27,7 @@ export const DEFAULT_POLICY: Policy = {
   // not noise. (The per-opponent adaptation adds up to +0.6 on top for foes we
   // keep losing to; the [0,2] cap keeps that safe.)
   lambda: 1.0,
-  targetBonus: 60,
+  targetBonus: 100,
   huntParityBias: 0,
   edgeAversion: 0,
 };

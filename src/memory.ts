@@ -297,15 +297,17 @@ export function opponentAdaptation(
   mem: Memory,
   opp: Opponent,
 ): { placementCandidates: number; lambdaBoost: number } {
-  const wr = opponentWinRate(mem, opp);
-  // Need a few games before reacting, so we don't over-fit to noise.
-  if (!wr || wr.games < 3) return { placementCandidates: 100, lambdaBoost: 0 };
-  const lossRate = 1 - wr.rate; // 0 (always win) … 1 (always lose)
-  // Lose more → search up to ~3× more placements, and add up to +0.6 to lambda
-  // (so the opponent's specific ship heatmap dominates the search).
+  const rec = (opp.id ? mem.opponents[opp.id] : undefined) ??
+    (opp.class ? mem.classes[opp.class] : undefined);
+  if (!rec || rec.games < 3) return { placementCandidates: 100, lambdaBoost: 0 };
+  const lossRate = 1 - rec.wins / rec.games;
+  // High avg shots hurts score even when we win (more opponent turns = more our ships sunk).
+  // +0 at ≤25 shots (near-perfect), up to +0.4 at 65+ shots.
+  const avgShots = rec.totalShots > 0 ? rec.totalShots / rec.games : 0;
+  const shotBoost = Math.min(0.4, Math.max(0, (avgShots - 25) / 100));
   return {
     placementCandidates: Math.round(100 + 200 * lossRate),
-    lambdaBoost: 0.6 * lossRate,
+    lambdaBoost: Math.min(1.0, 0.6 * lossRate + shotBoost),
   };
 }
 

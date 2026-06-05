@@ -56,12 +56,14 @@ function lastResult(): { wins: number; losses: number; score: number } | null {
 }
 
 async function main(): Promise<void> {
-  console.log(
-    `Autoplay: up to ${MAX_ATTEMPTS} attempts, stopping at ${TARGET_WINS} wins. ` +
-      `${ATTEMPT_DELAY}s between rounds.\n`,
-  );
+  const initialMem = loadMemory(MEMORY_FILE);
+  const initialBest = initialMem.bestScore ?? 0;
+  const before = initialMem.attempts.length;
 
-  const before = loadMemory(MEMORY_FILE).attempts.length;
+  console.log(
+    `Autoplay: up to ${MAX_ATTEMPTS} attempts, target ${TARGET_WINS}W-0L and a new high score. ` +
+      `Current best: ${initialBest}. ${ATTEMPT_DELAY}s between rounds.\n`,
+  );
 
   for (let i = 1; i <= MAX_ATTEMPTS; i++) {
     console.log(`\n========== AUTOPLAY ATTEMPT ${i}/${MAX_ATTEMPTS} ==========`);
@@ -86,18 +88,23 @@ async function main(): Promise<void> {
     );
 
     if (res.wins >= TARGET_WINS && res.losses === 0) {
+      if (res.score > initialBest) {
+        console.log(
+          `\n🏆 NEW HIGH SCORE — ${res.score} (${res.wins}W-0L, was ${initialBest}) after ${i} attempt(s). Done.`,
+        );
+        return;
+      }
       console.log(
-        `\n🏆 PERFECT SCORE — ${res.wins}W-0L (score ${res.score}) after ${i} attempt(s). Done.`,
+        `  Perfect win rate but score ${res.score} ≤ prior best ${initialBest} — continuing to improve.`,
       );
-      return;
     }
 
     if (i < MAX_ATTEMPTS) await sleep(ATTEMPT_DELAY);
   }
 
   console.log(
-    `\nReached MAX_ATTEMPTS (${MAX_ATTEMPTS}) without a perfect score. ` +
-      `Best so far: ${loadMemory(MEMORY_FILE).bestScore}. Run again to keep trying.`,
+    `\nReached MAX_ATTEMPTS (${MAX_ATTEMPTS}). ` +
+      `Best so far: ${loadMemory(MEMORY_FILE).bestScore} (started at ${initialBest}). Run again to keep trying.`,
   );
 }
 
