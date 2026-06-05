@@ -75,6 +75,27 @@ npm run play           # authenticate (approve once) and play the match
 DEBUG=1 npm run play   # also print raw server responses + the active policy
 ```
 
+### Play until perfect (autoplay)
+
+To keep playing attempts automatically until the agent scores a perfect game
+(15 wins, 0 losses) — without re-running `npm run play` by hand:
+
+```
+npm run autoplay
+```
+
+Each round is a fresh attempt that reuses the saved credentials and keeps
+accumulating opponent heatmaps in `.agent-memory.json`, so later rounds tend to
+play sharper. It stops as soon as it hits 15W-0L, or after `MAX_ATTEMPTS`.
+Tunable via env vars:
+
+```
+MAX_ATTEMPTS=50    # stop after this many attempts even if not perfect (default 50)
+TARGET_WINS=15     # wins required to call it "perfect" (default 15)
+ATTEMPT_DELAY=3    # seconds between attempts (default 3)
+AUTO_IMPROVE=1     # also re-tune the policy each round (needs ANTHROPIC_API_KEY)
+```
+
 On the **first** run, approve the agent at the printed verification URL
 within ~5 minutes. Subsequent runs reuse the saved credentials silently.
 

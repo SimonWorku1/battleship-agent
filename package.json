@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "play": "tsx src/index.ts",
+    "autoplay": "tsx src/autoplay.ts",
     "improve": "tsx src/improve.ts",
     "selftest": "tsx src/selftest.ts",
     "typecheck": "tsc --noEmit"
