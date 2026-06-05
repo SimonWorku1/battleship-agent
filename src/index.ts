@@ -22,6 +22,31 @@ function nextMove(resp: ServerResponse): NextRequiredMove | undefined {
   );
 }
 
+/**
+ * Best-effort read of whether we won a single game from a GAME_COMPLETED
+ * response. The exact field isn't documented, so we check the likely spots
+ * and return null (print nothing) when unsure.
+ */
+function gameWon(resp: ServerResponse): boolean | null {
+  const candidates: unknown[] = [
+    (resp.result as { won?: unknown; outcome?: unknown; result?: unknown } | undefined)?.won,
+    (resp.result as { outcome?: unknown } | undefined)?.outcome,
+    (resp.result as { result?: unknown } | undefined)?.result,
+    (resp.state as { outcome?: unknown } | undefined)?.outcome,
+    (resp as { won?: unknown }).won,
+    (resp as { outcome?: unknown }).outcome,
+  ];
+  for (const v of candidates) {
+    if (typeof v === "boolean") return v;
+    if (typeof v === "string") {
+      const up = v.toUpperCase();
+      if (up.includes("WIN") || up === "WON") return true;
+      if (up.includes("LOSS") || up.includes("LOSE") || up.includes("LOST")) return false;
+    }
+  }
+  return null;
+}
+
 /** Pull a numeric final score out of the (loosely-typed) result envelope. */
 function numericScore(score: unknown): number | null {
   if (typeof score === "number") return score;
@@ -60,6 +85,16 @@ async function main(): Promise<void> {
   let lastShot: [number, number] | null = null;
   let game = 1;
 
+  // Per-game instrumentation so we can see firing actually happening, and
+  // whether shot results are being parsed (hits/parsed == 0 means
+  // interpret.ts isn't matching the server's result shape).
+  let shots = 0;
+  let hits = 0;
+  let parsed = 0;
+  // Auto-capture the raw shape the first time a shot result fails to parse —
+  // this is exactly what's needed to fix interpret.ts, no DEBUG flag required.
+  let dumpedShotShape = false;
+
   for (let guard = 0; guard < 100_000; guard++) {
     switch (resp.responseType) {
       case "ATTEMPT_COMPLETED": {
@@ -75,6 +110,12 @@ async function main(): Promise<void> {
           "Final score:",
           typeof score === "object" ? JSON.stringify(score, null, 2) : score,
         );
+        const r = resp.result as Record<string, unknown> | undefined;
+        if (r && typeof r["wins"] === "number") {
+          console.log(
+            `Record: ${r["wins"]}W-${r["losses"]}L | opponent ships sunk ${r["opponentShipsSunk"]}, our ships lost ${r["agentShipsLost"]}, hit differential ${r["hitDifferential"]}`,
+          );
+        }
         console.log("\n--- learning ---");
         console.log(progressSummary(memory));
 
@@ -92,12 +133,19 @@ async function main(): Promise<void> {
       }
 
       case "GAME_COMPLETED": {
-        console.log(`Game ${game} complete.`);
+        const won = gameWon(resp);
+        console.log(
+          `Game ${game} complete — ${shots} shots, ${hits} hits, ${parsed} parsed` +
+            (won === null ? "" : won ? ", WON" : ", lost"),
+        );
         // Learn where this opponent's ships sat before resetting.
         learnShipCells(memory, brain.discoveredShipCells());
         game += 1;
-        brain = new Brain(undefined, prior); // fresh board, same learned prior
+        brain = new Brain(undefined, prior, undefined, policy); // fresh board, same prior+policy
         lastShot = null;
+        shots = 0;
+        hits = 0;
+        parsed = 0;
         // Continue from the embedded next response, or re-read state.
         resp = resp.next ?? (await api.getCurrent());
         continue;
@@ -106,8 +154,16 @@ async function main(): Promise<void> {
       case "MOVE_REQUIRED": {
         // If we were waiting on a shot result, feed it to the strategy.
         if (lastShot) {
-          const outcome = shotOutcome(resp);
-          if (outcome) brain.record(lastShot[0], lastShot[1], outcome);
+          const info = shotOutcome(resp, lastShot);
+          if (info) {
+            parsed += 1;
+            if (info.outcome !== "MISS") hits += 1;
+            brain.record(lastShot[0], lastShot[1], info.outcome, info.sunkLength);
+          } else if (!dumpedShotShape) {
+            // First unparsed result — dump the shape so interpret.ts can be fixed.
+            dumpedShotShape = true;
+            console.log("[unparsed shot result]", JSON.stringify(resp).slice(0, 800));
+          }
           lastShot = null;
         }
 
@@ -121,6 +177,7 @@ async function main(): Promise<void> {
           // SUBMIT_SHOT (default)
           const [r, c] = brain.nextShot();
           lastShot = [r, c];
+          shots += 1;
           resp = await api.submitShot(r, c);
         }
         continue;

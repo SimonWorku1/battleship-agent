@@ -1,66 +1,77 @@
 import type { Outcome } from "./brain.js";
-import type { ServerResponse, ShotResultObject } from "./types.js";
+import { FLEET, type ServerResponse, type ShipClass } from "./types.js";
 
 /**
- * Pull the outcome (HIT / MISS / SUNK) of the shot we just fired out of the
- * server's response. The live OpenAPI is the source of truth and the exact
- * field names can vary, so we read defensively from the most likely places
- * and normalise casing. If nothing is found we return null and the caller
- * falls back to pure hunting (still legal, never repeats).
- *
- * Run with DEBUG=1 to print raw responses and confirm the real shape.
+ * The result of the shot we just fired: its outcome, plus (on a sink) the
+ * length of the ship we sank, so the targeting engine can drop exactly that
+ * ship from its remaining fleet.
  */
-export function shotOutcome(resp: ServerResponse): Outcome | null {
-  // Try direct string fields first (e.g. state.shotResult == "HIT")
-  const directStrings: unknown[] = [
-    resp.state?.shotResult,
-    resp.state?.lastShot,
-    (resp as Record<string, unknown>)["shotResult"],
-    (resp as Record<string, unknown>)["lastShot"],
-  ];
-  for (const v of directStrings) {
-    if (typeof v === "string") {
-      const o = outcomeFromString(v);
-      if (o) return o;
+export interface ShotInfo {
+  outcome: Outcome;
+  sunkLength?: number;
+}
+
+const LENGTH_OF: Record<string, number> = Object.fromEntries(
+  FLEET.map((f) => [f.shipClass, f.length]),
+);
+
+/**
+ * Pull the outcome of the shot at `cell` out of the server's response.
+ *
+ * The real server reports our shots in `state.yourShots` — an array of
+ * `{ row, col, outcome }` (outcome ∈ HIT | MISS | SINK), sorted by board
+ * position, NOT chronologically. So we look up the cell we just fired rather
+ * than taking the last element. A SINK entry also carries `sunkShipClass`,
+ * which gives us the sunk ship's exact length.
+ *
+ * Falls back to a few defensive field guesses if `yourShots` isn't present,
+ * and returns null if nothing matches (the caller then keeps hunting).
+ */
+export function shotOutcome(
+  resp: ServerResponse,
+  cell: [number, number] | null,
+): ShotInfo | null {
+  const shots = (resp.state as { yourShots?: unknown } | undefined)?.yourShots;
+  if (cell && Array.isArray(shots)) {
+    const [r, c] = cell;
+    const entry = (shots as ShotEntry[]).find(
+      (s) => s && s.row === r && s.col === c,
+    );
+    if (entry) {
+      const outcome = normalize(entry.outcome);
+      if (outcome) {
+        const cls = entry.sunkShipClass ?? entry.shipClass;
+        const sunkLength =
+          outcome === "SUNK" && cls ? LENGTH_OF[cls] : undefined;
+        return sunkLength !== undefined ? { outcome, sunkLength } : { outcome };
+      }
     }
   }
 
-  // Try object-shaped result fields
-  const candidates: unknown[] = [
-    resp.state?.lastShot,
-    resp.state?.shotResult,
-    (resp as Record<string, unknown>)["lastShot"],
-    (resp as Record<string, unknown>)["shotResult"],
-    resp.result,
-  ];
-  for (const c of candidates) {
-    if (c && typeof c === "object") {
-      const o = fromShotResultObject(c as ShotResultObject);
-      if (o) return o;
-    }
+  // Defensive fallback for older/alternate shapes.
+  const direct =
+    (resp.state as { shotResult?: unknown } | undefined)?.shotResult ??
+    (resp as { shotResult?: unknown }).shotResult;
+  if (typeof direct === "string") {
+    const o = normalize(direct);
+    if (o) return { outcome: o };
   }
-
   return null;
 }
 
-function outcomeFromString(s: string): Outcome | null {
+interface ShotEntry {
+  row?: number;
+  col?: number;
+  outcome?: string;
+  sunkShipClass?: ShipClass;
+  shipClass?: ShipClass;
+}
+
+function normalize(s: string | undefined): Outcome | null {
+  if (!s) return null;
   const up = s.toUpperCase();
   if (up.includes("SUNK") || up.includes("SINK")) return "SUNK";
   if (up.includes("HIT")) return "HIT";
   if (up.includes("MISS")) return "MISS";
-  return null;
-}
-
-function fromShotResultObject(s: ShotResultObject): Outcome | null {
-  if (s.sunk === true) return "SUNK";
-
-  const label = (s.result ?? s.outcome ?? s.status)?.toString();
-  if (label) {
-    const o = outcomeFromString(label);
-    if (o) return o;
-  }
-
-  if (s.hit === true) return "HIT";
-  if (s.hit === false) return "MISS";
   return null;
 }
