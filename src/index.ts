@@ -145,10 +145,19 @@ async function main(): Promise<void> {
   // Guard against double-learning the same game (GAME_COMPLETED + ATTEMPT_COMPLETED
   // can both fire for the final game when the server embeds one inside the other).
   let currentGameLearned = false;
+  // Wins we've recorded for games 1..14. The final game's result is not carried
+  // as a per-game gameOutcome in ATTEMPT_COMPLETED, so we infer it from the
+  // server's authoritative attempt-total wins minus this running count.
+  let wonCount = 0;
 
   for (let guard = 0; guard < 100_000; guard++) {
     switch (resp.responseType) {
       case "ATTEMPT_COMPLETED": {
+        const score = resp.result?.finalScore;
+        const r2 = resp.result as Record<string, unknown> | undefined;
+        const winsN = typeof r2?.["wins"] === "number" ? (r2["wins"] as number) : undefined;
+        const lossesN = typeof r2?.["losses"] === "number" ? (r2["losses"] as number) : undefined;
+
         // The final game's completion can fold directly into this response
         // (no preceding GAME_COMPLETED). Only learn if we haven't already.
         if (!currentGameLearned) {
@@ -164,11 +173,14 @@ async function main(): Promise<void> {
           }
           const finalInc = incomingCells(resp);
           if (finalInc.length > 0) incoming = finalInc;
-          const won = gameWon(resp) ?? brain.enemyCleared();
+          // ATTEMPT_COMPLETED has no per-game gameOutcome and no state.yourShots
+          // for the final shot, so neither gameWon() nor enemyCleared() is
+          // reliable here. Infer the final game from the server's authoritative
+          // attempt-total wins minus the wins we already counted (games 1..14).
+          const won =
+            winsN !== undefined ? winsN > wonCount : (gameWon(resp) ?? brain.enemyCleared());
+          if (won) wonCount += 1;
           learnGame(memory, opp, brain.discoveredShipCells(), incoming, won, shots, hits);
-          // The final game's completion folded directly into this response (no
-          // discrete GAME_COMPLETED). Print its stats so the last game is never
-          // a silent gap — shots=0 here would mean it was forfeited.
           const cls = opp.class ? ` vs ${opp.class}` : "";
           console.log(
             `Game ${game} complete${cls} — ${shots} shots, ${hits} hits, ${parsed} parsed (final), ` +
@@ -180,10 +192,6 @@ async function main(): Promise<void> {
             );
           }
         }
-        const score = resp.result?.finalScore;
-        const r2 = resp.result as Record<string, unknown> | undefined;
-        const winsN = typeof r2?.["wins"] === "number" ? (r2["wins"] as number) : undefined;
-        const lossesN = typeof r2?.["losses"] === "number" ? (r2["losses"] as number) : undefined;
         recordAttempt(memory, numericScore(score), policy, winsN, lossesN);
         saveMemory(MEMORY_FILE, memory);
 
@@ -245,6 +253,7 @@ async function main(): Promise<void> {
           // Capture any final incoming-shot state the server bundles here.
           const finalInc = incomingCells(resp);
           if (finalInc.length > 0) incoming = finalInc;
+          if (won) wonCount += 1; // running tally so the final game can be inferred
           learnGame(memory, opp, brain.discoveredShipCells(), incoming, won, shots, hits);
           currentGameLearned = true;
         }
