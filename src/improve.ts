@@ -63,7 +63,11 @@ function summarize(mem: Memory, current: Policy): string {
       const pol = p
         ? `λ=${p.lambda} bonus=${p.targetBonus} parity=${p.huntParityBias} edge=${p.edgeAversion}`
         : "policy=unknown";
-      return `  score ${a.score}  (${pol})`;
+      const wr =
+        typeof a.wins === "number"
+          ? ` ${a.wins}W-${a.losses ?? "?"}L`
+          : "";
+      return `  score ${a.score}${wr}  (${pol})`;
     })
     .join("\n");
 
@@ -94,7 +98,7 @@ function summarize(mem: Memory, current: Policy): string {
 
   return [
     `Games learned from: ${mem.gamesObserved}. Scores: ${scoreLine}.`,
-    `Higher score is better; the score is driven mainly by how few shots you take, so the goal is to sink ships in fewer shots.`,
+    `This is a DUEL: both agents fire simultaneously. Score is driven by wins (clearing the opponent's fleet first) and hit differential. Win = sink their 17 cells before they sink our 17 cells. Goal: win all 15 games (perfect score). We play against a fixed roster: 5 SCOUT + 10 WARSHIP agents.`,
     ``,
     `Opponent ship-cell distribution (of all ship cells seen):`,
     `  outer ring: ${pct(edge)} of cells   interior: ${pct(interior)}`,
@@ -107,14 +111,14 @@ function summarize(mem: Memory, current: Policy): string {
   ].join("\n");
 }
 
-const SYSTEM = `You tune the strategy parameters of a Battleships firing engine that already uses a probability-density targeting model. You cannot change the algorithm — only four bounded knobs:
+const SYSTEM = `You tune the strategy parameters of a Battleships DUEL engine. Both agents fire simultaneously — the winner is whoever clears the opponent's 17-cell fleet first. The goal is a perfect score (15W-0L). You cannot change the algorithm — only four bounded knobs:
 
-- lambda: how strongly a learned per-cell heatmap of past opponent ship positions biases the search. Raise it only if the heatmap shows a clear spatial bias (e.g. ships cluster off the edges); keep it low if the distribution looks uniform, since an over-strong prior on noise hurts.
-- targetBonus: how aggressively the engine extends a line once it has adjacent hits. Higher sinks ships faster once found, but very high can over-commit to a wrong orientation.
-- huntParityBias: extra weight on checkerboard cells while hunting. The smallest ship is length 2, so a parity pattern already finds every ship; a mild bias can speed hunting, too much wastes the density signal.
-- edgeAversion: down-weight the board's outer ring. Only useful if opponents demonstrably keep ships off the edges.
+- lambda: how strongly a learned per-cell heatmap of past opponent ship positions biases the search. Raise it if opponents cluster ships predictably; keep it low if the distribution is uniform, since a strong prior on noise hurts.
+- targetBonus: how aggressively the engine extends a line once it has adjacent hits. Higher sinks ships faster once found, but very high values over-commit to a wrong orientation and waste shots.
+- huntParityBias: extra weight on checkerboard (even-parity) cells while hunting. The smallest ship is length 2, so a parity pattern guarantees coverage; a mild bias speeds hunting without discarding density signal.
+- edgeAversion: down-weight the board's outer ring while hunting. Only useful if opponents demonstrably avoid the edges.
 
-Move conservatively: make small, justified adjustments toward fewer shots per game. Base every change on the data you are given, not on generic Battleships lore. Return values within the stated bounds.`;
+This is a race: we need to clear 17 cells faster than our opponent clears ours. Fewer shots per game = more wins. Move conservatively: make small, justified adjustments based on the data. Return values within the stated bounds.`;
 
 export async function proposePolicy(
   mem: Memory,

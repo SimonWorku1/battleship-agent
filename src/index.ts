@@ -124,15 +124,25 @@ async function main(): Promise<void> {
   // Auto-capture the raw shape the first time a shot result fails to parse —
   // this is exactly what's needed to fix interpret.ts, no DEBUG flag required.
   let dumpedShotShape = false;
+  // Guard against double-learning the same game (GAME_COMPLETED + ATTEMPT_COMPLETED
+  // can both fire for the final game when the server embeds one inside the other).
+  let currentGameLearned = false;
 
   for (let guard = 0; guard < 100_000; guard++) {
     switch (resp.responseType) {
       case "ATTEMPT_COMPLETED": {
-        // The final game's completion folds into this response, so learn from
-        // the board we just finished before recording the score.
-        learnGame(memory, opp, brain.discoveredShipCells(), incoming);
+        // The final game's completion can fold directly into this response
+        // (no preceding GAME_COMPLETED). Only learn if we haven't already.
+        if (!currentGameLearned) {
+          const finalInc = incomingCells(resp);
+          if (finalInc.length > 0) incoming = finalInc;
+          learnGame(memory, opp, brain.discoveredShipCells(), incoming);
+        }
         const score = resp.result?.finalScore;
-        recordAttempt(memory, numericScore(score), policy);
+        const r2 = resp.result as Record<string, unknown> | undefined;
+        const winsN = typeof r2?.["wins"] === "number" ? (r2["wins"] as number) : undefined;
+        const lossesN = typeof r2?.["losses"] === "number" ? (r2["losses"] as number) : undefined;
+        recordAttempt(memory, numericScore(score), policy, winsN, lossesN);
         saveMemory(MEMORY_FILE, memory);
 
         console.log("\n=== ATTEMPT COMPLETED ===");
@@ -140,10 +150,9 @@ async function main(): Promise<void> {
           "Final score:",
           typeof score === "object" ? JSON.stringify(score, null, 2) : score,
         );
-        const r = resp.result as Record<string, unknown> | undefined;
-        if (r && typeof r["wins"] === "number") {
+        if (r2 && typeof r2["wins"] === "number") {
           console.log(
-            `Record: ${r["wins"]}W-${r["losses"]}L | opponent ships sunk ${r["opponentShipsSunk"]}, our ships lost ${r["agentShipsLost"]}, hit differential ${r["hitDifferential"]}`,
+            `Record: ${r2["wins"]}W-${r2["losses"]}L | opponent ships sunk ${r2["opponentShipsSunk"]}, our ships lost ${r2["agentShipsLost"]}, hit differential ${r2["hitDifferential"]}`,
           );
         }
         console.log("\n--- learning ---");
@@ -169,10 +178,16 @@ async function main(): Promise<void> {
           `Game ${game} complete${cls} — ${shots} shots, ${hits} hits, ${parsed} parsed` +
             (won === null ? "" : won ? ", WON" : ", lost"),
         );
-        // Learn this opponent's ship placement (our hits) and where they fired.
-        learnGame(memory, opp, brain.discoveredShipCells(), incoming);
+        if (!currentGameLearned) {
+          // Capture any final incoming-shot state the server bundles here.
+          const finalInc = incomingCells(resp);
+          if (finalInc.length > 0) incoming = finalInc;
+          learnGame(memory, opp, brain.discoveredShipCells(), incoming);
+          currentGameLearned = true;
+        }
         game += 1;
         lastShot = null;
+        currentGameLearned = false; // reset for the next game
         // Continue from the embedded next response, or re-read state.
         resp = resp.next ?? (await api.getCurrent());
         continue;
@@ -207,6 +222,7 @@ async function main(): Promise<void> {
           hits = 0;
           parsed = 0;
           incoming = [];
+          currentGameLearned = false;
           brain = new Brain(
             BOARD_SIZE,
             offensePrior(memory, opp, policy.lambda), // fire at THIS opponent's likely cells first

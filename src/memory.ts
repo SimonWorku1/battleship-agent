@@ -44,7 +44,7 @@ export interface Memory {
   /** Per-class aggregates (e.g. "SCOUT", "WARSHIP"), keyed by opponentClass. */
   classes: Record<string, OpponentRecord>;
   /** One entry per attempt, recording the score and the policy that produced it. */
-  attempts: { score: number; ts: string; policy?: Policy }[];
+  attempts: { score: number; wins?: number; losses?: number; ts: string; policy?: Policy }[];
   bestScore: number | null;
 }
 
@@ -257,9 +257,15 @@ export function recordAttempt(
   mem: Memory,
   score: number | null,
   policy?: Policy,
+  wins?: number,
+  losses?: number,
 ): void {
   if (score === null || Number.isNaN(score)) return;
-  mem.attempts.push({ score, ts: new Date().toISOString(), ...(policy ? { policy } : {}) });
+  const entry: Memory["attempts"][number] = { score, ts: new Date().toISOString() };
+  if (policy) entry.policy = policy;
+  if (typeof wins === "number") entry.wins = wins;
+  if (typeof losses === "number") entry.losses = losses;
+  mem.attempts.push(entry);
   if (mem.bestScore === null || score > mem.bestScore) mem.bestScore = score;
 }
 
@@ -271,9 +277,14 @@ export function progressSummary(mem: Memory): string {
   const recent = scores.slice(-5);
   const avg = recent.reduce((a, b) => a + b, 0) / recent.length;
   const isBest = mem.bestScore !== null && latest >= mem.bestScore;
+  const latestAttempt = mem.attempts[mem.attempts.length - 1];
+  const winNote =
+    latestAttempt && typeof latestAttempt.wins === "number"
+      ? ` | ${latestAttempt.wins}W-${latestAttempt.losses ?? "?"}L`
+      : "";
   const lines = [
     `Attempts played: ${scores.length} | games learned from: ${mem.gamesObserved}`,
-    `This attempt: ${latest} | best: ${mem.bestScore} | avg(last ${recent.length}): ${avg.toFixed(1)}`,
+    `This attempt: ${latest}${winNote} | best: ${mem.bestScore} | avg(last ${recent.length}): ${avg.toFixed(1)}`,
   ];
   const classNote = Object.entries(mem.classes)
     .map(([cls, r]) => `${cls} ×${r.games}`)

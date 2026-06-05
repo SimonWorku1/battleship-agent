@@ -121,7 +121,7 @@ export function dispersedFleet(): Placement[] {
  */
 export function chooseDispersedFleet(
   danger: number[] | null,
-  candidates = 40,
+  candidates = 100,
 ): Placement[] {
   if (!danger) return dispersedFleet();
 
