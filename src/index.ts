@@ -16,6 +16,7 @@ import {
   dangerMap,
   recordAttempt,
   progressSummary,
+  opponentScoreboard,
   type Opponent,
 } from "./memory.js";
 import { loadPolicy, savePolicy } from "./policy.js";
@@ -124,6 +125,9 @@ async function main(): Promise<void> {
   // Auto-capture the raw shape the first time a shot result fails to parse —
   // this is exactly what's needed to fix interpret.ts, no DEBUG flag required.
   let dumpedShotShape = false;
+  // Dump the GAME_COMPLETED shape once if we can't read a win/loss field, so
+  // the real field can be wired into gameWon() instead of relying on inference.
+  let dumpedGameShape = false;
   // Guard against double-learning the same game (GAME_COMPLETED + ATTEMPT_COMPLETED
   // can both fire for the final game when the server embeds one inside the other).
   let currentGameLearned = false;
@@ -136,13 +140,17 @@ async function main(): Promise<void> {
         if (!currentGameLearned) {
           const finalInc = incomingCells(resp);
           if (finalInc.length > 0) incoming = finalInc;
-          learnGame(memory, opp, brain.discoveredShipCells(), incoming);
+          // Win/loss for this final game: prefer a server field, else infer
+          // from whether we cleared the enemy's whole fleet.
+          const won = gameWon(resp) ?? (brain.enemyCleared() ? true : false);
+          learnGame(memory, opp, brain.discoveredShipCells(), incoming, won);
           // The final game's completion folded directly into this response (no
           // discrete GAME_COMPLETED). Print its stats so the last game is never
           // a silent gap — shots=0 here would mean it was forfeited.
           const cls = opp.class ? ` vs ${opp.class}` : "";
           console.log(
-            `Game ${game} complete${cls} — ${shots} shots, ${hits} hits, ${parsed} parsed (final)`,
+            `Game ${game} complete${cls} — ${shots} shots, ${hits} hits, ${parsed} parsed (final)` +
+              (won ? ", WON" : ", lost"),
           );
           if (shots === 0) {
             console.warn(
@@ -169,6 +177,7 @@ async function main(): Promise<void> {
         }
         console.log("\n--- learning ---");
         console.log(progressSummary(memory));
+        console.log(opponentScoreboard(memory));
 
         // Close the loop: ask the Claude strategist to re-tune the policy for
         // next time. Opt-in, and degrades gracefully without an API key.
@@ -184,17 +193,25 @@ async function main(): Promise<void> {
       }
 
       case "GAME_COMPLETED": {
-        const won = gameWon(resp);
+        // Win/loss: prefer an explicit server field; if absent, infer it from
+        // whether our firing engine cleared the enemy's entire fleet (a duel
+        // ends when one side is fully sunk).
+        const serverWon = gameWon(resp);
+        if (serverWon === null && !dumpedGameShape) {
+          dumpedGameShape = true;
+          console.log("[game-completed shape]", JSON.stringify(resp).slice(0, 600));
+        }
+        const won = serverWon ?? (brain.enemyCleared() ? true : false);
         const cls = opp.class ? ` vs ${opp.class}` : "";
         console.log(
           `Game ${game} complete${cls} — ${shots} shots, ${hits} hits, ${parsed} parsed` +
-            (won === null ? "" : won ? ", WON" : ", lost"),
+            (won ? ", WON" : ", lost"),
         );
         if (!currentGameLearned) {
           // Capture any final incoming-shot state the server bundles here.
           const finalInc = incomingCells(resp);
           if (finalInc.length > 0) incoming = finalInc;
-          learnGame(memory, opp, brain.discoveredShipCells(), incoming);
+          learnGame(memory, opp, brain.discoveredShipCells(), incoming, won);
           currentGameLearned = true;
         }
         game += 1;

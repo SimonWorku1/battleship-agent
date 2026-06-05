@@ -3,7 +3,7 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { BOARD_SIZE } from "./types.js";
 import { MEMORY_FILE, POLICY_FILE } from "./config.js";
-import { loadMemory, type Memory } from "./memory.js";
+import { loadMemory, opponentScoreboard, type Memory } from "./memory.js";
 import {
   loadPolicy,
   savePolicy,
@@ -105,6 +105,8 @@ function summarize(mem: Memory, current: Policy): string {
     `  even-parity cells: ${pct(even)}   odd-parity cells: ${pct(odd)}`,
     ``,
     `Current policy: λ(prior)=${current.lambda} targetBonus=${current.targetBonus} huntParityBias=${current.huntParityBias} edgeAversion=${current.edgeAversion}`,
+    ``,
+    opponentScoreboard(mem),
     ``,
     `Recent attempts (newest last):`,
     history || "  (none)",

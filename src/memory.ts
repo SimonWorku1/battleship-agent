@@ -27,6 +27,9 @@ import type { Policy } from "./policy.js";
 export interface OpponentRecord {
   class: string | null;
   games: number;
+  /** Games we won / lost against this opponent (or class), across all attempts. */
+  wins: number;
+  losses: number;
   shipHeat: number[];
   fireHeat: number[];
 }
@@ -108,6 +111,8 @@ function sanitizeRecords(
       out[key] = {
         class: r.class ?? null,
         games: r.games ?? 0,
+        wins: r.wins ?? 0,
+        losses: r.losses ?? 0,
         shipHeat: r.shipHeat,
         fireHeat: r.fireHeat,
       };
@@ -120,6 +125,8 @@ function blankRecord(size: number, cls: string | null): OpponentRecord {
   return {
     class: cls,
     games: 0,
+    wins: 0,
+    losses: 0,
     shipHeat: new Array<number>(size * size).fill(0),
     fireHeat: new Array<number>(size * size).fill(0),
   };
@@ -174,6 +181,7 @@ export function learnGame(
   opp: Opponent,
   shipCells: [number, number][],
   fireCells: [number, number][],
+  won?: boolean | null,
 ): void {
   // Global ship heatmap + game counter (unchanged behaviour).
   learnShipCells(mem, shipCells);
@@ -190,9 +198,36 @@ export function learnGame(
   }
   for (const rec of buckets) {
     rec.games += 1;
+    if (won === true) rec.wins += 1;
+    else if (won === false) rec.losses += 1;
     bump(rec.shipHeat, shipCells, mem.size);
     bump(rec.fireHeat, fireCells, mem.size);
   }
+}
+
+/**
+ * Human-readable per-opponent record, sorted worst-win-rate first, so the
+ * opponents we keep losing to are obvious. This is the signal that was missing:
+ * it tells us exactly which agents (and class) the strategy can't beat yet.
+ */
+export function opponentScoreboard(mem: Memory): string {
+  const rows = Object.entries(mem.opponents)
+    .map(([id, r]) => ({
+      id,
+      cls: r.class ?? "?",
+      games: r.games,
+      wins: r.wins,
+      losses: r.losses,
+      rate: r.games > 0 ? r.wins / r.games : 0,
+    }))
+    .filter((r) => r.games > 0)
+    .sort((a, b) => a.rate - b.rate);
+  if (rows.length === 0) return "No per-opponent records yet.";
+  const lines = rows.map(
+    (r) =>
+      `  ${r.id.slice(0, 12)} [${r.cls}] ${r.wins}-${r.losses} (${(100 * r.rate).toFixed(0)}% win)`,
+  );
+  return ["Per-opponent record (worst win-rate first):", ...lines].join("\n");
 }
 
 function bump(heat: number[], cells: [number, number][], size: number): void {

@@ -41,6 +41,7 @@ export class Brain {
   /** Per-cell static multiplier from the policy (edge aversion). */
   private readonly cellWeight: number[];
   private remaining: number[]; // lengths of ships not yet sunk
+  private readonly initialShips: number; // how many ships the enemy started with
   private openHits: Cell[] = []; // hits belonging to ships not yet sunk
 
   constructor(
@@ -58,6 +59,7 @@ export class Brain {
         ? prior
         : new Array<number>(size * size).fill(1);
     this.remaining = [...fleetLengths];
+    this.initialShips = fleetLengths.length;
 
     // Precompute the static per-cell weight: down-weight the outer ring by
     // `edgeAversion` (opponents often keep ships off the edges).
@@ -133,6 +135,21 @@ export class Brain {
     this.openHits.push([r, c]);
 
     if (outcome === "SUNK") this.resolveSunk([r, c], sunkLength);
+  }
+
+  /**
+   * True once every enemy ship has been sunk (the remaining-fleet list is
+   * empty). In a duel, clearing the enemy's whole fleet means we won that game,
+   * so this is a reliable win signal even when the server's response doesn't
+   * carry an explicit win/loss field.
+   */
+  enemyCleared(): boolean {
+    return this.remaining.length === 0;
+  }
+
+  /** How many enemy ships we've sunk so far (0–5). */
+  shipsSunk(): number {
+    return this.initialShips - this.remaining.length;
   }
 
   /** Every cell we've confirmed holds a ship (for learning a placement prior). */
