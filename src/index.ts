@@ -4,7 +4,7 @@ import { Brain } from "./brain.js";
 import { randomFleet, validateFleet } from "./placement.js";
 import { shotOutcome } from "./interpret.js";
 import type { NextRequiredMove, ServerResponse } from "./types.js";
-import { DEBUG, MEMORY_FILE } from "./config.js";
+import { DEBUG, MEMORY_FILE, POLICY_FILE, AUTO_IMPROVE } from "./config.js";
 import {
   loadMemory,
   saveMemory,
@@ -13,6 +13,7 @@ import {
   recordAttempt,
   progressSummary,
 } from "./memory.js";
+import { loadPolicy, savePolicy } from "./policy.js";
 
 function nextMove(resp: ServerResponse): NextRequiredMove | undefined {
   return (
@@ -49,11 +50,13 @@ async function main(): Promise<void> {
       `Loaded memory: ${memory.gamesObserved} games learned, best score ${memory.bestScore}.`,
     );
   }
-  const prior = priorFromMemory(memory);
+  const policy = loadPolicy(POLICY_FILE);
+  const prior = priorFromMemory(memory, policy.lambda);
+  if (DEBUG) console.log("[policy]", JSON.stringify(policy));
   console.log("Authenticated. Starting attempt (15 games)...");
 
   let resp = await api.createAttempt();
-  let brain = new Brain(undefined, prior);
+  let brain = new Brain(undefined, prior, undefined, policy);
   let lastShot: [number, number] | null = null;
   let game = 1;
 
@@ -64,7 +67,7 @@ async function main(): Promise<void> {
         // the board we just finished before recording the score.
         learnShipCells(memory, brain.discoveredShipCells());
         const score = resp.result?.finalScore;
-        recordAttempt(memory, numericScore(score));
+        recordAttempt(memory, numericScore(score), policy);
         saveMemory(MEMORY_FILE, memory);
 
         console.log("\n=== ATTEMPT COMPLETED ===");
@@ -74,6 +77,10 @@ async function main(): Promise<void> {
         );
         console.log("\n--- learning ---");
         console.log(progressSummary(memory));
+
+        // Close the loop: ask the Claude strategist to re-tune the policy for
+        // next time. Opt-in, and degrades gracefully without an API key.
+        if (AUTO_IMPROVE) await autoImprove(memory, policy);
         return;
       }
 
@@ -127,6 +134,32 @@ async function main(): Promise<void> {
   }
 
   throw new Error("Loop guard tripped — aborting to avoid an infinite loop");
+}
+
+/**
+ * Run the Claude strategist after an attempt and persist the tuned policy.
+ * Imported lazily so the gameplay path has no hard dependency on the
+ * Anthropic SDK or an API key.
+ */
+async function autoImprove(
+  memory: import("./memory.js").Memory,
+  current: import("./policy.js").Policy,
+): Promise<void> {
+  if (!process.env["ANTHROPIC_API_KEY"]) {
+    console.log("\n(AUTO_IMPROVE set but ANTHROPIC_API_KEY is missing — skipping re-tune.)");
+    return;
+  }
+  try {
+    const { proposePolicy } = await import("./improve.js");
+    console.log("\n--- strategist (re-tuning policy) ---");
+    const { policy, reasoning } = await proposePolicy(memory, current);
+    console.log(reasoning);
+    console.log("New policy:", JSON.stringify(policy));
+    savePolicy(POLICY_FILE, policy);
+    console.log(`Saved to ${POLICY_FILE} — next run will use it.`);
+  } catch (err) {
+    console.error("Strategist failed (continuing):", err instanceof Error ? err.message : err);
+  }
 }
 
 main().catch((err) => {

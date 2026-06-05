@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { BOARD_SIZE } from "./types.js";
+import type { Policy } from "./policy.js";
 
 /**
  * Persistent learning that lets the agent improve across runs.
@@ -24,7 +25,8 @@ export interface Memory {
   /** Total ship cells observed (for reference). */
   cellsObserved: number;
   gamesObserved: number;
-  attempts: { score: number; ts: string }[];
+  /** One entry per attempt, recording the score and the policy that produced it. */
+  attempts: { score: number; ts: string; policy?: Policy }[];
   bestScore: number | null;
 }
 
@@ -95,10 +97,14 @@ export function priorFromMemory(mem: Memory, lambda = 0.6): number[] {
   );
 }
 
-/** Record an attempt's final score and update the best-so-far. */
-export function recordAttempt(mem: Memory, score: number | null): void {
+/** Record an attempt's final score (and the policy that produced it). */
+export function recordAttempt(
+  mem: Memory,
+  score: number | null,
+  policy?: Policy,
+): void {
   if (score === null || Number.isNaN(score)) return;
-  mem.attempts.push({ score, ts: new Date().toISOString() });
+  mem.attempts.push({ score, ts: new Date().toISOString(), ...(policy ? { policy } : {}) });
   if (mem.bestScore === null || score > mem.bestScore) mem.bestScore = score;
 }
 

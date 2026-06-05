@@ -32,6 +32,21 @@ export const MEMORY_FILE =
   process.env["BATTLESHIP_MEMORY"] ?? ".agent-memory.json";
 
 /**
+ * Where the self-tuned strategy policy lives. The Claude strategist
+ * (src/improve.ts) writes proposed knob values here; the firing engine reads
+ * them on the next run. This is the persisted state of the closed loop.
+ */
+export const POLICY_FILE =
+  process.env["BATTLESHIP_POLICY"] ?? ".agent-policy.json";
+
+/**
+ * When set (and ANTHROPIC_API_KEY is present), the agent calls the Claude
+ * strategist automatically after each attempt to re-tune its policy — closing
+ * the play → analyse → re-tune loop in a single run.
+ */
+export const AUTO_IMPROVE = Boolean(process.env["AUTO_IMPROVE"]);
+
+/**
  * Full capability list. Per the protocol the server intersects the JWT's
  * capabilities with the grants, so EVERY request must carry the full list
  * or the omitted capability returns 403 CAPABILITY_NOT_GRANTED. This bites

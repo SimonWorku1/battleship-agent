@@ -1,4 +1,5 @@
 import { BOARD_SIZE, FLEET } from "./types.js";
+import { DEFAULT_POLICY, type Policy } from "./policy.js";
 
 export type Outcome = "HIT" | "MISS" | "SUNK";
 
@@ -36,18 +37,20 @@ export class Brain {
   private readonly status: Status[];
   private readonly shotMask: boolean[];
   private readonly prior: number[];
+  private readonly policy: Policy;
+  /** Per-cell static multiplier from the policy (edge aversion). */
+  private readonly cellWeight: number[];
   private remaining: number[]; // lengths of ships not yet sunk
   private openHits: Cell[] = []; // hits belonging to ships not yet sunk
-
-  /** Extra weight a placement gets per outstanding hit it covers. */
-  private static readonly TARGET_BONUS = 60;
 
   constructor(
     size: number = BOARD_SIZE,
     prior?: number[],
     fleetLengths: number[] = DEFAULT_FLEET,
+    policy: Policy = DEFAULT_POLICY,
   ) {
     this.size = size;
+    this.policy = policy;
     this.status = new Array<Status>(size * size).fill(Status.Unknown);
     this.shotMask = new Array<boolean>(size * size).fill(false);
     this.prior =
@@ -55,6 +58,18 @@ export class Brain {
         ? prior
         : new Array<number>(size * size).fill(1);
     this.remaining = [...fleetLengths];
+
+    // Precompute the static per-cell weight: down-weight the outer ring by
+    // `edgeAversion` (opponents often keep ships off the edges).
+    this.cellWeight = new Array<number>(size * size).fill(1);
+    if (policy.edgeAversion > 0) {
+      for (let r = 0; r < size; r++) {
+        for (let c = 0; c < size; c++) {
+          const onRing = r === 0 || r === size - 1 || c === 0 || c === size - 1;
+          if (onRing) this.cellWeight[r * size + c] = 1 - policy.edgeAversion;
+        }
+      }
+    }
   }
 
   private idx(r: number, c: number): number {
@@ -247,11 +262,16 @@ export class Brain {
 
     if (targeting && covered === 0) return; // must explain an outstanding hit
 
-    const weight = targeting ? 1 + covered * Brain.TARGET_BONUS : 1;
+    const weight = targeting ? 1 + covered * this.policy.targetBonus : 1;
     for (const [r, c] of cells) {
       const i = this.idx(r, c);
       if (this.shotMask[i]) continue; // only score un-shot cells
-      density[i] = (density[i] ?? 0) + weight * (this.prior[i] ?? 1);
+      let mult = (this.prior[i] ?? 1) * (this.cellWeight[i] ?? 1);
+      // Parity bias only applies while hunting (it would distort a hit line).
+      if (!targeting && this.policy.huntParityBias > 0 && (r + c) % 2 === 0) {
+        mult *= 1 + this.policy.huntParityBias;
+      }
+      density[i] = (density[i] ?? 0) + weight * mult;
     }
   }
 }

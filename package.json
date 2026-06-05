@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "play": "tsx src/index.ts",
+    "improve": "tsx src/improve.ts",
     "selftest": "tsx src/selftest.ts",
     "typecheck": "tsc --noEmit"
   },
@@ -14,7 +15,9 @@
     "url": "http://local_proxy@127.0.0.1:43535/git/SimonWorku1/battleship-agent"
   },
   "dependencies": {
-    "@auth/agent": "^0.5.1"
+    "@anthropic-ai/sdk": "^0.100.1",
+    "@auth/agent": "^0.5.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
