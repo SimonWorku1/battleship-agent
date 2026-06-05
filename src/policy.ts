@@ -22,7 +22,11 @@ export interface Policy {
 }
 
 export const DEFAULT_POLICY: Policy = {
-  lambda: 0.6,
+  // Trust the learned prior fairly strongly: the opponent roster is fixed and we
+  // bank lots of per-opponent placement data, so the heatmap is a real signal,
+  // not noise. (The per-opponent adaptation adds up to +0.6 on top for foes we
+  // keep losing to; the [0,2] cap keeps that safe.)
+  lambda: 1.0,
   targetBonus: 60,
   huntParityBias: 0,
   edgeAversion: 0,
