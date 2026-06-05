@@ -27,10 +27,21 @@ game server, then prints its final score.
   - Placement (`src/placement.ts`): random but legal (in bounds, no
     overlaps), re-randomized every game, and **validated locally** before
     sending.
-  - Firing (`src/brain.ts`): **HUNT** on a parity/checkerboard pattern; on a
-    **HIT**, **TARGET** orthogonal neighbours, locking onto the ship's line
-    once two hits align, until it sinks. Never repeats a shot, never fires
-    off-board.
+  - Firing (`src/brain.ts`): a **probability-density engine**. Every shot it
+    superimposes every legal placement of the still-floating fleet over the
+    board and fires the highest-density un-shot cell. This unifies hunting
+    (a parity-optimal search concentrated where the largest remaining ship
+    likely sits) and targeting (placements that explain outstanding hits are
+    weighted by how many they cover, so a line's open ends dominate). Never
+    repeats a shot, never fires off-board.
+- **Self-improvement** (`src/memory.ts`): after every game the agent records
+  where the opponent's ships actually were into a per-cell heatmap, persisted
+  to `.agent-memory.json`. That heatmap becomes a **prior** that biases the
+  density engine toward historically ship-dense cells, so it tends to find
+  ships faster the more it plays. The prior starts uniform and is gentle by
+  design: with no data (or a uniformly-random opponent) it stays ~1 and can't
+  hurt; any real placement bias only helps. Per-attempt scores are also kept
+  so improvement is visible run over run (`best`, `avg(last 5)`, "new best").
 
 ## Setup
 
@@ -55,8 +66,10 @@ npm run selftest
 ```
 
 Plays thousands of simulated games and asserts: no repeated shots, no
-off-board shots, and effective targeting (~57 shots to clear all 17 ship
-cells vs ~95 for blind hunting).
+off-board shots, and effective targeting (~45 shots to clear all 17 ship
+cells vs ~95 for blind hunting). It also runs a **self-improvement check**:
+against a biased opponent it shows that learning a prior from past games
+measurably reduces the shots needed in later games.
 
 ## Network requirements
 

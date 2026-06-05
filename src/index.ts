@@ -4,13 +4,33 @@ import { Brain } from "./brain.js";
 import { randomFleet, validateFleet } from "./placement.js";
 import { shotOutcome } from "./interpret.js";
 import type { NextRequiredMove, ServerResponse } from "./types.js";
-import { DEBUG } from "./config.js";
+import { DEBUG, MEMORY_FILE } from "./config.js";
+import {
+  loadMemory,
+  saveMemory,
+  learnShipCells,
+  priorFromMemory,
+  recordAttempt,
+  progressSummary,
+} from "./memory.js";
 
 function nextMove(resp: ServerResponse): NextRequiredMove | undefined {
   return (
     resp.state?.nextRequiredMove ??
     (resp as { nextRequiredMove?: NextRequiredMove }).nextRequiredMove
   );
+}
+
+/** Pull a numeric final score out of the (loosely-typed) result envelope. */
+function numericScore(score: unknown): number | null {
+  if (typeof score === "number") return score;
+  if (score && typeof score === "object") {
+    for (const key of ["finalScore", "score", "total", "value"]) {
+      const v = (score as Record<string, unknown>)[key];
+      if (typeof v === "number") return v;
+    }
+  }
+  return null;
 }
 
 async function main(): Promise<void> {
@@ -21,22 +41,39 @@ async function main(): Promise<void> {
   // any capability, so a clean response here proves the JWT scope is right.
   const rules = await api.getRules();
   if (DEBUG) console.log("[rules]", JSON.stringify(rules));
+
+  // Load what we've learned so far and turn it into a firing prior.
+  const memory = loadMemory(MEMORY_FILE);
+  if (memory.gamesObserved > 0) {
+    console.log(
+      `Loaded memory: ${memory.gamesObserved} games learned, best score ${memory.bestScore}.`,
+    );
+  }
+  const prior = priorFromMemory(memory);
   console.log("Authenticated. Starting attempt (15 games)...");
 
   let resp = await api.createAttempt();
-  let brain = new Brain();
+  let brain = new Brain(undefined, prior);
   let lastShot: [number, number] | null = null;
   let game = 1;
 
   for (let guard = 0; guard < 100_000; guard++) {
     switch (resp.responseType) {
       case "ATTEMPT_COMPLETED": {
+        // The final game's completion folds into this response, so learn from
+        // the board we just finished before recording the score.
+        learnShipCells(memory, brain.discoveredShipCells());
         const score = resp.result?.finalScore;
+        recordAttempt(memory, numericScore(score));
+        saveMemory(MEMORY_FILE, memory);
+
         console.log("\n=== ATTEMPT COMPLETED ===");
         console.log(
           "Final score:",
           typeof score === "object" ? JSON.stringify(score, null, 2) : score,
         );
+        console.log("\n--- learning ---");
+        console.log(progressSummary(memory));
         return;
       }
 
@@ -49,8 +86,10 @@ async function main(): Promise<void> {
 
       case "GAME_COMPLETED": {
         console.log(`Game ${game} complete.`);
+        // Learn where this opponent's ships sat before resetting.
+        learnShipCells(memory, brain.discoveredShipCells());
         game += 1;
-        brain = new Brain(); // fresh board for the next opponent
+        brain = new Brain(undefined, prior); // fresh board, same learned prior
         lastShot = null;
         // Continue from the embedded next response, or re-read state.
         resp = resp.next ?? (await api.getCurrent());

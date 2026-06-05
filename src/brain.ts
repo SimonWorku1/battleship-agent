@@ -1,4 +1,4 @@
-import { BOARD_SIZE } from "./types.js";
+import { BOARD_SIZE, FLEET } from "./types.js";
 
 export type Outcome = "HIT" | "MISS" | "SUNK";
 
@@ -10,41 +10,51 @@ const enum Status {
   Hit = 2,
 }
 
+const DEFAULT_FLEET = FLEET.map((f) => f.length); // [5,4,3,3,2]
+
 /**
- * Firing strategy for one game.
+ * Probability-density firing engine for one game.
  *
- *  - HUNT: fire on a checkerboard/parity pattern (every ship of length >= 2
- *    must touch a parity cell), visiting parity cells in a shuffled order.
- *  - TARGET: on a HIT, enqueue orthogonal neighbours and work them until the
- *    ship sinks. Once two hits line up, only the two ends of that line are
- *    pursued, which sinks ships far faster than poking all four sides.
+ * Every shot, we superimpose EVERY legal placement of every still-floating
+ * ship over the board (both orientations, all positions that don't collide
+ * with a known miss or a sunk ship). Each placement adds weight to the cells
+ * it covers; we then fire the highest-weighted un-shot cell. This unifies
+ * "hunt" and "target" into one model:
  *
- * Invariants: never repeats a shot, never fires off-board.
+ *  - With no outstanding hits it naturally produces a parity-optimal hunt,
+ *    concentrated where the largest remaining ship is most likely to sit.
+ *  - With outstanding hits it only counts placements that explain those hits
+ *    and weights them by how many they cover, so a 2-in-a-row line's open
+ *    ends dominate — sinking ships in far fewer shots than fixed parity.
+ *
+ * A learned per-cell `prior` (from past games, see memory.ts) multiplies the
+ * weights, so the engine improves the more it plays. Invariants preserved:
+ * never repeats a shot, never fires off-board.
  */
 export class Brain {
   private readonly size: number;
   private readonly status: Status[];
-  private readonly shot: boolean[];
-  private readonly queue: Cell[] = []; // target stack (LIFO)
-  private hits: Cell[] = []; // current unsunk ship's hits
-  private readonly huntOrder: Cell[];
+  private readonly shotMask: boolean[];
+  private readonly prior: number[];
+  private remaining: number[]; // lengths of ships not yet sunk
+  private openHits: Cell[] = []; // hits belonging to ships not yet sunk
 
-  constructor(size: number = BOARD_SIZE) {
+  /** Extra weight a placement gets per outstanding hit it covers. */
+  private static readonly TARGET_BONUS = 60;
+
+  constructor(
+    size: number = BOARD_SIZE,
+    prior?: number[],
+    fleetLengths: number[] = DEFAULT_FLEET,
+  ) {
     this.size = size;
     this.status = new Array<Status>(size * size).fill(Status.Unknown);
-    this.shot = new Array<boolean>(size * size).fill(false);
-
-    // Parity cells first (shuffled), then the rest (shuffled) as a fallback.
-    const parity: Cell[] = [];
-    const other: Cell[] = [];
-    for (let r = 0; r < size; r++) {
-      for (let c = 0; c < size; c++) {
-        ((r + c) % 2 === 0 ? parity : other).push([r, c]);
-      }
-    }
-    shuffle(parity);
-    shuffle(other);
-    this.huntOrder = [...parity, ...other];
+    this.shotMask = new Array<boolean>(size * size).fill(false);
+    this.prior =
+      prior && prior.length === size * size
+        ? prior
+        : new Array<number>(size * size).fill(1);
+    this.remaining = [...fleetLengths];
   }
 
   private idx(r: number, c: number): number {
@@ -56,109 +66,192 @@ export class Brain {
   }
 
   hasShot(r: number, c: number): boolean {
-    return this.shot[this.idx(r, c)] === true;
+    return this.shotMask[this.idx(r, c)] === true;
   }
 
-  /** Pick the next legal, never-repeated shot. */
+  /** Pick the next legal, never-repeated shot via the density map. */
   nextShot(): Cell {
-    // 1) Drain the target queue (skip anything already fired).
-    while (this.queue.length > 0) {
-      const top = this.queue.pop();
-      if (!top) continue;
-      const [r, c] = top;
-      if (this.inBounds(r, c) && !this.hasShot(r, c)) return this.take(r, c);
+    const density = this.densityMap();
+
+    let best: Cell | null = null;
+    let bestScore = -Infinity;
+    let ties = 0;
+    for (let r = 0; r < this.size; r++) {
+      for (let c = 0; c < this.size; c++) {
+        if (this.shotMask[this.idx(r, c)]) continue;
+        const d = density[this.idx(r, c)] ?? 0;
+        if (d > bestScore) {
+          bestScore = d;
+          best = [r, c];
+          ties = 1;
+        } else if (d === bestScore) {
+          // Reservoir tie-break so equal-density cells are chosen uniformly.
+          ties += 1;
+          if (Math.random() < 1 / ties) best = [r, c];
+        }
+      }
     }
-    // 2) Hunt: first unshot cell in the parity-first shuffled order.
-    for (const [r, c] of this.huntOrder) {
-      if (!this.hasShot(r, c)) return this.take(r, c);
-    }
-    throw new Error("No cells left to shoot");
+
+    if (!best) throw new Error("No cells left to shoot");
+    return this.take(best[0], best[1]);
   }
 
   private take(r: number, c: number): Cell {
-    this.shot[this.idx(r, c)] = true; // reserve so we never repeat
+    this.shotMask[this.idx(r, c)] = true; // reserve so we never repeat
     return [r, c];
   }
 
-  /** Feed back the outcome of a shot so the strategy can adapt. */
-  record(r: number, c: number, outcome: Outcome): void {
-    this.shot[this.idx(r, c)] = true;
+  /**
+   * Feed back the outcome of a shot. `sunkLength` is the length of the ship
+   * that just sank, when the server reports it; otherwise we infer it from
+   * the contiguous run of outstanding hits.
+   */
+  record(r: number, c: number, outcome: Outcome, sunkLength?: number): void {
+    this.shotMask[this.idx(r, c)] = true;
     if (outcome === "MISS") {
       this.status[this.idx(r, c)] = Status.Miss;
       return;
     }
 
-    // HIT or SUNK
+    // HIT or SUNK — this cell holds part of a ship either way.
     this.status[this.idx(r, c)] = Status.Hit;
-    this.hits.push([r, c]);
+    this.openHits.push([r, c]);
 
-    if (outcome === "SUNK") {
-      // Ship gone: drop its hits and abandon any leftover targets so we
-      // return cleanly to hunting.
-      this.hits = [];
-      this.queue.length = 0;
-      return;
-    }
-
-    this.enqueueTargets();
+    if (outcome === "SUNK") this.resolveSunk([r, c], sunkLength);
   }
 
-  private enqueueTargets(): void {
-    const ends: Cell[] = [];
-
-    if (this.hits.length >= 2) {
-      const rows = this.hits.map(([r]) => r);
-      const cols = this.hits.map(([, c]) => c);
-      const firstRow = rows[0];
-      const firstCol = cols[0];
-      const sameRow = firstRow !== undefined && rows.every((r) => r === firstRow);
-      const sameCol = firstCol !== undefined && cols.every((c) => c === firstCol);
-
-      if (sameRow && firstRow !== undefined) {
-        ends.push(
-          [firstRow, Math.min(...cols) - 1],
-          [firstRow, Math.max(...cols) + 1],
-        );
-      } else if (sameCol && firstCol !== undefined) {
-        ends.push(
-          [Math.min(...rows) - 1, firstCol],
-          [Math.max(...rows) + 1, firstCol],
-        );
-      } else {
-        const lastHit = this.hits.at(-1);
-        if (lastHit) ends.push(...this.neighbours(lastHit));
+  /** Every cell we've confirmed holds a ship (for learning a placement prior). */
+  discoveredShipCells(): Cell[] {
+    const cells: Cell[] = [];
+    for (let r = 0; r < this.size; r++) {
+      for (let c = 0; c < this.size; c++) {
+        if (this.status[this.idx(r, c)] === Status.Hit) cells.push([r, c]);
       }
-    } else {
-      const lastHit = this.hits.at(-1);
-      if (lastHit) ends.push(...this.neighbours(lastHit));
     }
-
-    for (const [r, c] of ends) {
-      if (!this.inBounds(r, c)) continue;
-      if (this.hasShot(r, c)) continue;
-      if (this.queue.some(([qr, qc]) => qr === r && qc === c)) continue;
-      this.queue.push([r, c]);
-    }
+    return cells;
   }
 
-  private neighbours([r, c]: Cell): Cell[] {
-    return [
-      [r - 1, c],
-      [r + 1, c],
-      [r, c - 1],
-      [r, c + 1],
-    ];
-  }
-}
+  /**
+   * A ship sank at `last`. Remove its cells from the outstanding-hit set and
+   * drop one matching length from the remaining fleet, so the density model
+   * stops trying to place that ship.
+   */
+  private resolveSunk(last: Cell, sunkLength?: number): void {
+    const run = this.contiguousRun(last);
+    const length = sunkLength && sunkLength > 0 ? sunkLength : run.length;
 
-function shuffle<T>(arr: T[]): void {
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    const a = arr[i];
-    const b = arr[j];
-    if (a !== undefined && b !== undefined) {
-      arr[i] = b;
-      arr[j] = a;
+    // Take the `length` cells of the run nearest `last` as the sunk ship.
+    const sunkCells = run.slice(0, length);
+    const sunkKeys = new Set(sunkCells.map(([r, c]) => `${r},${c}`));
+    this.openHits = this.openHits.filter(
+      ([r, c]) => !sunkKeys.has(`${r},${c}`),
+    );
+
+    // Remove one ship of this length from the remaining fleet (closest match
+    // if the exact length isn't present, to stay robust to mis-inference).
+    this.removeRemaining(length);
+  }
+
+  private removeRemaining(length: number): void {
+    let pick = this.remaining.indexOf(length);
+    if (pick === -1 && this.remaining.length > 0) {
+      let bestDiff = Infinity;
+      this.remaining.forEach((l, i) => {
+        const diff = Math.abs(l - length);
+        if (diff < bestDiff) {
+          bestDiff = diff;
+          pick = i;
+        }
+      });
+    }
+    if (pick >= 0) this.remaining.splice(pick, 1);
+  }
+
+  /** Outstanding hits forming a straight contiguous line through `cell`. */
+  private contiguousRun([r, c]: Cell): Cell[] {
+    const isOpenHit = (rr: number, cc: number): boolean =>
+      this.openHits.some(([hr, hc]) => hr === rr && hc === cc);
+
+    const horizontal: Cell[] = [[r, c]];
+    for (let cc = c - 1; isOpenHit(r, cc); cc--) horizontal.unshift([r, cc]);
+    for (let cc = c + 1; isOpenHit(r, cc); cc++) horizontal.push([r, cc]);
+
+    const vertical: Cell[] = [[r, c]];
+    for (let rr = r - 1; isOpenHit(rr, c); rr--) vertical.unshift([rr, c]);
+    for (let rr = r + 1; isOpenHit(rr, c); rr++) vertical.push([rr, c]);
+
+    const line = horizontal.length >= vertical.length ? horizontal : vertical;
+    // Order the run so the cells nearest `last` come first.
+    return line.sort(
+      (a, b) =>
+        Math.abs(a[0] - r) + Math.abs(a[1] - c) -
+        (Math.abs(b[0] - r) + Math.abs(b[1] - c)),
+    );
+  }
+
+  /** Build the per-cell placement-density map (weighted by the prior). */
+  private densityMap(): number[] {
+    const density = new Array<number>(this.size * this.size).fill(0);
+    const targeting = this.openHits.length > 0;
+    const openSet = new Set(this.openHits.map(([r, c]) => `${r},${c}`));
+
+    for (const length of this.remaining) {
+      for (const [dr, dc] of [
+        [0, 1], // horizontal
+        [1, 0], // vertical
+      ] as const) {
+        const maxR = this.size - dr * (length - 1);
+        const maxC = this.size - dc * (length - 1);
+        for (let r = 0; r < maxR; r++) {
+          for (let c = 0; c < maxC; c++) {
+            this.scorePlacement(density, r, c, dr, dc, length, targeting, openSet);
+          }
+        }
+      }
+    }
+
+    // Fallback: if targeting found nothing consistent (shouldn't happen),
+    // hunt instead so we never stall.
+    if (targeting && density.every((d) => d === 0)) {
+      const saved = this.openHits;
+      this.openHits = [];
+      const fallback = this.densityMap();
+      this.openHits = saved;
+      return fallback;
+    }
+    return density;
+  }
+
+  private scorePlacement(
+    density: number[],
+    r0: number,
+    c0: number,
+    dr: number,
+    dc: number,
+    length: number,
+    targeting: boolean,
+    openSet: Set<string>,
+  ): void {
+    const cells: Cell[] = [];
+    let covered = 0;
+    for (let k = 0; k < length; k++) {
+      const r = r0 + dr * k;
+      const c = c0 + dc * k;
+      const s = this.status[this.idx(r, c)];
+      if (s === Status.Miss) return; // can't cover a known miss
+      const open = openSet.has(`${r},${c}`);
+      if (s === Status.Hit && !open) return; // can't overlap a sunk ship
+      if (open) covered += 1;
+      cells.push([r, c]);
+    }
+
+    if (targeting && covered === 0) return; // must explain an outstanding hit
+
+    const weight = targeting ? 1 + covered * Brain.TARGET_BONUS : 1;
+    for (const [r, c] of cells) {
+      const i = this.idx(r, c);
+      if (this.shotMask[i]) continue; // only score un-shot cells
+      density[i] = (density[i] ?? 0) + weight * (this.prior[i] ?? 1);
     }
   }
 }

@@ -24,6 +24,14 @@ export const AGENT_ID_FILE =
   process.env["BATTLESHIP_AGENT_ID"] ?? ".agent-id";
 
 /**
+ * Where the agent stores what it has learned across runs: a per-cell ship
+ * heatmap (a placement prior) and the per-attempt score history. Persisting
+ * this is what lets the agent improve upon itself between runs.
+ */
+export const MEMORY_FILE =
+  process.env["BATTLESHIP_MEMORY"] ?? ".agent-memory.json";
+
+/**
  * Full capability list. Per the protocol the server intersects the JWT's
  * capabilities with the grants, so EVERY request must carry the full list
  * or the omitted capability returns 403 CAPABILITY_NOT_GRANTED. This bites

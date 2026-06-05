@@ -4,5 +4,8 @@ node_modules/
 .agent-auth.json
 .agent-id
 
+# Learned memory (ship heatmap + score history) — runtime artifact, per-machine.
+.agent-memory.json
+
 # Logs / scratch
 *.log
