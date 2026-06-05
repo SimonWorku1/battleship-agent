@@ -34,14 +34,22 @@ game server, then prints its final score.
     likely sits) and targeting (placements that explain outstanding hits are
     weighted by how many they cover, so a line's open ends dominate). Never
     repeats a shot, never fires off-board.
-- **Self-improvement — learned prior** (`src/memory.ts`): after every game the
-  agent records where the opponent's ships actually were into a per-cell
-  heatmap, persisted to `.agent-memory.json`. That heatmap becomes a **prior**
-  that biases the density engine toward historically ship-dense cells, so it
-  tends to find ships faster the more it plays. The prior starts uniform and is
-  gentle by design: with no data (or a uniformly-random opponent) it stays ~1
-  and can't hurt; any real placement bias only helps. Per-attempt scores are
-  kept so improvement is visible run over run (`best`, `avg(last 5)`, "new best").
+- **Opponent modeling** (`src/memory.ts`): the match is a **duel** against a
+  fixed roster (5 SCOUT + 10 WARSHIP agents that recur across attempts), and
+  each game's state names the opponent (`opponentId`, `opponentClass`). The
+  agent keeps a per-opponent **and** per-class model, persisted to
+  `.agent-memory.json`:
+  - *Offense* — a heatmap of where that opponent's ships actually sat (our
+    hits) becomes a firing prior, so we shoot their favorite cells first and
+    **clear them faster** (winning the race). Specific-opponent data is
+    weighted above class data above the global pool.
+  - *Defense* — a heatmap of where that opponent fires at us (`incomingShots`)
+    steers placement into their **cold zones** (`chooseDispersedFleet`), so
+    they take longer to find us. Class-level learning helps within an attempt
+    too (after the first SCOUT, the next SCOUT benefits); opponent-level
+    learning compounds across attempts as the roster recurs.
+  Per-attempt scores are kept so improvement is visible run over run (`best`,
+  `avg(last 5)`, "new best"), and the models start empty so they can only help.
 - **Self-improvement — Claude strategist** (`src/improve.ts`): a closed loop at
   the *strategy* layer. Between attempts it hands the **Claude API**
   (`claude-opus-4-8`) the agent's own record — per-attempt scores, the policy

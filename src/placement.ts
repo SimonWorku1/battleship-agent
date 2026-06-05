@@ -113,6 +113,38 @@ export function dispersedFleet(): Placement[] {
 }
 
 /**
+ * Pick a dispersed (no-touch) layout that hides best from a specific opponent.
+ * `danger` is a per-cell map of how often this opponent fires on each cell
+ * (see memory.dangerMap). We generate several no-touch fleets and keep the one
+ * whose cells sit in the opponent's coldest zone — so they take longer to find
+ * us. With no danger data we just return a fresh dispersed fleet.
+ */
+export function chooseDispersedFleet(
+  danger: number[] | null,
+  candidates = 40,
+): Placement[] {
+  if (!danger) return dispersedFleet();
+
+  let best: Placement[] | null = null;
+  let bestRisk = Infinity;
+  for (let i = 0; i < candidates; i++) {
+    const fleet = dispersedFleet();
+    let risk = 0;
+    for (const p of fleet) {
+      const len = FLEET.find((f) => f.shipClass === p.shipClass)?.length ?? 0;
+      for (const [r, c] of cellsFor(p, len) ?? []) {
+        risk += danger[r * BOARD_SIZE + c] ?? 0;
+      }
+    }
+    if (risk < bestRisk) {
+      bestRisk = risk;
+      best = fleet;
+    }
+  }
+  return best ?? dispersedFleet();
+}
+
+/**
  * Generate a random but legal fleet: in bounds, no overlaps. Re-randomized
  * on every call (every game gets a fresh layout).
  */

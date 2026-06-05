@@ -1,19 +1,46 @@
 import { Auth } from "./auth.js";
 import { GameApi } from "./api.js";
 import { Brain } from "./brain.js";
-import { dispersedFleet, validateFleet } from "./placement.js";
+import { chooseDispersedFleet, validateFleet } from "./placement.js";
 import { shotOutcome } from "./interpret.js";
-import type { NextRequiredMove, ServerResponse } from "./types.js";
+import { BOARD_SIZE, type NextRequiredMove, type ServerResponse } from "./types.js";
+
+/** Placeholder opponent used before we've identified the real one. */
+const NO_OPP: Opponent = { id: null, class: null };
 import { DEBUG, MEMORY_FILE, POLICY_FILE, AUTO_IMPROVE } from "./config.js";
 import {
   loadMemory,
   saveMemory,
-  learnShipCells,
-  priorFromMemory,
+  learnGame,
+  offensePrior,
+  dangerMap,
   recordAttempt,
   progressSummary,
+  type Opponent,
 } from "./memory.js";
 import { loadPolicy, savePolicy } from "./policy.js";
+
+/** Read the current opponent's identity/class from the response state. */
+function readOpponent(resp: ServerResponse): Opponent | null {
+  const o = (resp.state as { opponent?: { opponentId?: unknown; opponentClass?: unknown } } | undefined)
+    ?.opponent;
+  if (!o) return null;
+  return {
+    id: typeof o.opponentId === "string" ? o.opponentId : null,
+    class: typeof o.opponentClass === "string" ? o.opponentClass : null,
+  };
+}
+
+/** Cells the opponent has fired at us so far (where THEY hunt). */
+function incomingCells(resp: ServerResponse): [number, number][] {
+  const inc = (resp.state as { incomingShots?: unknown } | undefined)?.incomingShots;
+  if (!Array.isArray(inc)) return [];
+  const out: [number, number][] = [];
+  for (const s of inc as Array<{ row?: unknown; col?: unknown }>) {
+    if (typeof s?.row === "number" && typeof s?.col === "number") out.push([s.row, s.col]);
+  }
+  return out;
+}
 
 function nextMove(resp: ServerResponse): NextRequiredMove | undefined {
   return (
@@ -76,18 +103,21 @@ async function main(): Promise<void> {
     );
   }
   const policy = loadPolicy(POLICY_FILE);
-  const prior = priorFromMemory(memory, policy.lambda);
   if (DEBUG) console.log("[policy]", JSON.stringify(policy));
   console.log("Authenticated. Starting attempt (15 games)...");
 
   let resp = await api.createAttempt();
-  let brain = new Brain(undefined, prior, undefined, policy);
+  // The brain is (re)built per game once we know the opponent, so its firing
+  // prior can be tailored to that specific opponent. Start with a generic one.
+  let brain = new Brain(BOARD_SIZE, offensePrior(memory, NO_OPP, policy.lambda), undefined, policy);
   let lastShot: [number, number] | null = null;
   let game = 1;
 
-  // Per-game instrumentation so we can see firing actually happening, and
-  // whether shot results are being parsed (hits/parsed == 0 means
-  // interpret.ts isn't matching the server's result shape).
+  // Opponent identity + their cumulative fire at us, tracked per game.
+  let opp: Opponent = NO_OPP;
+  let incoming: [number, number][] = [];
+
+  // Per-game instrumentation: confirms firing happens and results parse.
   let shots = 0;
   let hits = 0;
   let parsed = 0;
@@ -100,7 +130,7 @@ async function main(): Promise<void> {
       case "ATTEMPT_COMPLETED": {
         // The final game's completion folds into this response, so learn from
         // the board we just finished before recording the score.
-        learnShipCells(memory, brain.discoveredShipCells());
+        learnGame(memory, opp, brain.discoveredShipCells(), incoming);
         const score = resp.result?.finalScore;
         recordAttempt(memory, numericScore(score), policy);
         saveMemory(MEMORY_FILE, memory);
@@ -134,24 +164,27 @@ async function main(): Promise<void> {
 
       case "GAME_COMPLETED": {
         const won = gameWon(resp);
+        const cls = opp.class ? ` vs ${opp.class}` : "";
         console.log(
-          `Game ${game} complete — ${shots} shots, ${hits} hits, ${parsed} parsed` +
+          `Game ${game} complete${cls} — ${shots} shots, ${hits} hits, ${parsed} parsed` +
             (won === null ? "" : won ? ", WON" : ", lost"),
         );
-        // Learn where this opponent's ships sat before resetting.
-        learnShipCells(memory, brain.discoveredShipCells());
+        // Learn this opponent's ship placement (our hits) and where they fired.
+        learnGame(memory, opp, brain.discoveredShipCells(), incoming);
         game += 1;
-        brain = new Brain(undefined, prior, undefined, policy); // fresh board, same prior+policy
         lastShot = null;
-        shots = 0;
-        hits = 0;
-        parsed = 0;
         // Continue from the embedded next response, or re-read state.
         resp = resp.next ?? (await api.getCurrent());
         continue;
       }
 
       case "MOVE_REQUIRED": {
+        // Keep opponent identity and their incoming fire up to date.
+        const seen = readOpponent(resp);
+        if (seen) opp = seen;
+        const inc = incomingCells(resp);
+        if (inc.length > 0) incoming = inc;
+
         // If we were waiting on a shot result, feed it to the strategy.
         if (lastShot) {
           const info = shotOutcome(resp, lastShot);
@@ -169,9 +202,22 @@ async function main(): Promise<void> {
 
         const move = nextMove(resp);
         if (move === "PLACE_SHIPS") {
-          const fleet = dispersedFleet(); // no-touch layout maximises survival
+          // New game: reset per-game state and build an opponent-tailored brain.
+          shots = 0;
+          hits = 0;
+          parsed = 0;
+          incoming = [];
+          brain = new Brain(
+            BOARD_SIZE,
+            offensePrior(memory, opp, policy.lambda), // fire at THIS opponent's likely cells first
+            undefined,
+            policy,
+          );
+          // Hide in this opponent's coldest zone (where they rarely fire).
+          const fleet = chooseDispersedFleet(dangerMap(memory, opp));
           validateFleet(fleet); // prove it's legal before sending
-          console.log(`Game ${game}: placing ships...`);
+          const cls = opp.class ? ` (${opp.class})` : "";
+          console.log(`Game ${game}: placing ships${cls}...`);
           resp = await api.placeShips(fleet);
         } else {
           // SUBMIT_SHOT (default)
