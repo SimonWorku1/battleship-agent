@@ -1,0 +1,8 @@
+node_modules/
+
+# Persistent Agent Auth credentials — keypair + connection. Never commit.
+.agent-auth.json
+.agent-id
+
+# Logs / scratch
+*.log

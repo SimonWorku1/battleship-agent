@@ -1,0 +1,24 @@
+{
+  "name": "battleship-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "TypeScript agent that plays Battleships against the intern game server using the Agent Auth protocol.",
+  "type": "module",
+  "scripts": {
+    "play": "tsx src/index.ts",
+    "selftest": "tsx src/selftest.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "http://local_proxy@127.0.0.1:43535/git/SimonWorku1/battleship-agent"
+  },
+  "dependencies": {
+    "@auth/agent": "^0.5.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
