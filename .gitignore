@@ -1,14 +1,5 @@
 node_modules/
 
-# Persistent Agent Auth credentials — keypair + connection. Never commit.
+# Auth credentials contain a private key — never commit.
 .agent-auth.json
 .agent-id
-
-# Learned memory (ship heatmap + score history) — runtime artifact, per-machine.
-.agent-memory.json
-
-# Self-tuned strategy policy (written by the Claude strategist) — per-machine.
-.agent-policy.json
-
-# Logs / scratch
-*.log
